@@ -141,7 +141,21 @@ def save_entry_and_result(entry: Entry, result: Result) -> None:
             ),
         )
 
-
+def update_result_override(
+    entry_id: str,
+    manual_place: int | None,
+    override_note: str = "",
+) -> None:
+    """Updates or clears the Judge's Decision (JD) override for a single recorded result."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE results
+            SET manual_place = ?, override_note = ?
+            WHERE entry_id = ?
+            """,
+            (manual_place, override_note.strip(), entry_id),
+        )
 def load_all_data() -> tuple[list[Entry], list[Result]]:
     with _get_conn() as conn:
         entry_rows = conn.execute("SELECT * FROM entries").fetchall()
