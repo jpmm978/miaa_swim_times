@@ -41,6 +41,7 @@ class Entry:
     athlete_ids: list[str]  # 1 ID for individual/diving, up to 4 IDs for relays
     is_exhibition: bool = False
     relay_letter: Optional[str] = None  # "A", "B", "C"
+    heat_number: int = 1        # Heat 1 scores; Heat 2+ are exhibition heats
 
 
 @dataclass
