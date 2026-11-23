@@ -3,6 +3,7 @@ import io
 import json
 import sqlite3
 from pathlib import Path
+from typing import Optional
 
 from models import Entry, Event, EventType, Result, ResultStatus
 from timing import format_cs_to_time
@@ -16,8 +17,17 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_def: str) -> None:
+    """Adds a column to an existing SQLite table if it is not already present."""
+    existing = {
+        row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+
+
 def init_db() -> None:
-    """Creates tables if they do not already exist and migrates older schemas."""
+    """Creates tables if they do not already exist and migrates missing columns."""
     with _get_conn() as conn:
         conn.execute(
             """
@@ -44,9 +54,9 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS results (
                 entry_id TEXT PRIMARY KEY,
                 watch_time_cs INTEGER,
-                backup_times_cs TEXT NOT NULL,
+                backup_times_cs TEXT NOT NULL DEFAULT '[]',
                 diving_score REAL,
-                status TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'OK',
                 official_time_cs INTEGER,
                 manual_place INTEGER,
                 override_note TEXT NOT NULL DEFAULT '',
@@ -78,16 +88,13 @@ def init_db() -> None:
             """
         )
 
-        # Safe migration for existing swim_meet.db files
-        existing_cols = {
-            row["name"] for row in conn.execute("PRAGMA table_info(results)").fetchall()
-        }
-        if "manual_place" not in existing_cols:
-            conn.execute("ALTER TABLE results ADD COLUMN manual_place INTEGER")
-        if "override_note" not in existing_cols:
-            conn.execute(
-                "ALTER TABLE results ADD COLUMN override_note TEXT NOT NULL DEFAULT ''"
-            )
+        _ensure_column(conn, "results", "watch_time_cs", "INTEGER")
+        _ensure_column(conn, "results", "backup_times_cs", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "results", "diving_score", "REAL")
+        _ensure_column(conn, "results", "status", "TEXT NOT NULL DEFAULT 'OK'")
+        _ensure_column(conn, "results", "official_time_cs", "INTEGER")
+        _ensure_column(conn, "results", "manual_place", "INTEGER")
+        _ensure_column(conn, "results", "override_note", "TEXT NOT NULL DEFAULT ''")
 
         conn.execute(
             "INSERT OR IGNORE INTO meet_meta (key, value) VALUES ('team_a', 'Home Team')"
@@ -122,7 +129,9 @@ def save_entry_and_result(entry: Entry, result: Result) -> None:
     with _get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO entries (entry_id, event_number, team_id, athlete_ids, is_exhibition, relay_letter)
+            INSERT OR REPLACE INTO entries (
+                entry_id, event_number, team_id, athlete_ids, is_exhibition, relay_letter
+            )
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
@@ -136,7 +145,7 @@ def save_entry_and_result(entry: Entry, result: Result) -> None:
         )
         conn.execute(
             """
-            INSERT INTO results (
+            INSERT OR REPLACE INTO results (
                 entry_id, watch_time_cs, backup_times_cs, diving_score,
                 status, official_time_cs, manual_place, override_note
             )
@@ -157,10 +166,9 @@ def save_entry_and_result(entry: Entry, result: Result) -> None:
 
 def update_result_override(
     entry_id: str,
-    manual_place: int | None,
+    manual_place: Optional[int],
     override_note: str = "",
 ) -> None:
-    """Updates or clears the Judge's Decision (JD) override for a single recorded result."""
     with _get_conn() as conn:
         conn.execute(
             """
@@ -168,12 +176,11 @@ def update_result_override(
             SET manual_place = ?, override_note = ?
             WHERE entry_id = ?
             """,
-            (manual_place, override_note.strip(), entry_id),
+            (manual_place, override_note, entry_id),
         )
 
 
 def delete_entry_and_result(entry_id: str) -> None:
-    """Deletes a single recorded entry and its associated result."""
     with _get_conn() as conn:
         conn.execute("DELETE FROM results WHERE entry_id = ?", (entry_id,))
         conn.execute("DELETE FROM entries WHERE entry_id = ?", (entry_id,))
@@ -195,20 +202,87 @@ def load_all_data() -> tuple[list[Entry], list[Result]]:
         )
         for r in entry_rows
     ]
-    results = [
-        Result(
-            entry_id=r["entry_id"],
-            watch_time_cs=r["watch_time_cs"],
-            backup_times_cs=json.loads(r["backup_times_cs"]),
-            diving_score=r["diving_score"],
-            status=ResultStatus(r["status"]),
-            official_time_cs=r["official_time_cs"],
-            manual_place=r["manual_place"],
-            override_note=r["override_note"] or "",
+
+    results: list[Result] = []
+    for r in result_rows:
+        keys = set(r.keys())
+        watch_cs = r["watch_time_cs"] if "watch_time_cs" in keys else None
+        backups_raw = r["backup_times_cs"] if "backup_times_cs" in keys else "[]"
+        backups_cs = json.loads(backups_raw) if backups_raw else []
+        diving_score = r["diving_score"] if "diving_score" in keys else None
+        status_val = r["status"] if "status" in keys and r["status"] else "OK"
+        official_cs = r["official_time_cs"] if "official_time_cs" in keys else None
+        manual_place = r["manual_place"] if "manual_place" in keys else None
+        override_note = (
+            r["override_note"] if "override_note" in keys and r["override_note"] else ""
         )
-        for r in result_rows
-    ]
+
+        results.append(
+            Result(
+                entry_id=r["entry_id"],
+                watch_time_cs=watch_cs,
+                backup_times_cs=backups_cs,
+                diving_score=diving_score,
+                status=ResultStatus(status_val),
+                official_time_cs=official_cs,
+                manual_place=manual_place,
+                override_note=override_note,
+            )
+        )
+
     return entries, results
+
+
+def save_lineups(lineup_rows: list[dict]) -> None:
+    with _get_conn() as conn:
+        for row in lineup_rows:
+            ev_num = row["event_number"]
+            lane = row["lane"]
+            athletes = row.get("athlete_ids") or []
+            if athletes:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO lineups (
+                        event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ev_num,
+                        lane,
+                        row["team_id"],
+                        json.dumps(athletes),
+                        row.get("relay_letter"),
+                        int(bool(row.get("is_exhibition", False))),
+                    ),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM lineups WHERE event_number = ? AND lane = ?",
+                    (ev_num, lane),
+                )
+
+
+def load_lineups() -> dict[tuple[int, int], dict]:
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT * FROM lineups").fetchall()
+
+    lineups: dict[tuple[int, int], dict] = {}
+    for r in rows:
+        lineups[(r["event_number"], r["lane"])] = {
+            "event_number": r["event_number"],
+            "lane": r["lane"],
+            "team_id": r["team_id"],
+            "athlete_ids": json.loads(r["athlete_ids"]),
+            "relay_letter": r["relay_letter"],
+            "is_exhibition": bool(r["is_exhibition"]),
+        }
+    return lineups
+
+
+def clear_lineups() -> None:
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM lineups")
 
 
 def clear_event(event_number: int) -> None:
@@ -241,11 +315,9 @@ def parse_roster_csv(file_bytes: bytes) -> list[tuple[str, str]]:
         if len(cells) < 2:
             continue
 
-        # Skip header row if present
         if idx == 0 and cells[0].lower() in ("name", "swimmer", "athlete", "last", "last name"):
             continue
 
-        # Last cell is gender; everything before it is the swimmer's name
         raw_gender = cells[-1].upper()
         name = " ".join(cells[:-1]).strip()
 
@@ -286,55 +358,6 @@ def load_rosters() -> dict[tuple[str, str], list[str]]:
     return rosters
 
 
-def save_lineups(rows: list[dict]) -> None:
-    """Replaces saved lineup assignments for the given event/lane rows."""
-    with _get_conn() as conn:
-        for row in rows:
-            if row["athlete_ids"]:
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO lineups
-                        (event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        row["event_number"],
-                        row["lane"],
-                        row["team_id"],
-                        json.dumps(row["athlete_ids"]),
-                        row.get("relay_letter"),
-                        int(row.get("is_exhibition", False)),
-                    ),
-                )
-            else:
-                conn.execute(
-                    "DELETE FROM lineups WHERE event_number = ? AND lane = ?",
-                    (row["event_number"], row["lane"]),
-                )
-
-
-def load_lineups() -> dict[tuple[int, int], dict]:
-    """Returns a lookup dict mapping (event_number, lane) -> lineup dict."""
-    with _get_conn() as conn:
-        rows = conn.execute("SELECT * FROM lineups").fetchall()
-
-    return {
-        (r["event_number"], r["lane"]): {
-            "team_id": r["team_id"],
-            "athlete_ids": json.loads(r["athlete_ids"]),
-            "relay_letter": r["relay_letter"],
-            "is_exhibition": bool(r["is_exhibition"]),
-        }
-        for r in rows
-    }
-
-
-def clear_lineups() -> None:
-    """Deletes all saved lineup assignments while leaving rosters and meet results intact."""
-    with _get_conn() as conn:
-        conn.execute("DELETE FROM lineups")
-
-
 def export_meet_csv(
     events: list[Event],
     entries: list[Entry],
@@ -361,7 +384,6 @@ def export_meet_csv(
             "Gender",
             "Event Name",
             "Place",
-            "JD Override",
             "Team",
             "Participant",
             "Official Time / Score",
@@ -379,7 +401,11 @@ def export_meet_csv(
         if ev.event_type == EventType.DIVING:
             perf = f"{res.diving_score:.2f}" if res.diving_score is not None else ""
         else:
-            perf = format_cs_to_time(res.official_time_cs) if res.official_time_cs is not None else ""
+            perf = (
+                format_cs_to_time(res.official_time_cs)
+                if res.official_time_cs is not None
+                else ""
+            )
 
         writer.writerow(
             {
@@ -387,7 +413,6 @@ def export_meet_csv(
                 "Gender": "Girls" if ev.gender == "F" else "Boys",
                 "Event Name": ev.name,
                 "Place": res.place if res.place is not None else "",
-                "JD Override": "Yes" if res.manual_place is not None else "",
                 "Team": ent.team_id,
                 "Participant": ", ".join(ent.athlete_ids),
                 "Official Time / Score": perf,
