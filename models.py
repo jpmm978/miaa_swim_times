@@ -46,7 +46,7 @@ class Entry:
 @dataclass
 class Result:
     entry_id: str
-    pad_time_cs: Optional[int] = None
+    watch_time_cs: Optional[int] = None
     backup_times_cs: list[int] = field(default_factory=list)
     diving_score: Optional[float] = None
     status: ResultStatus = ResultStatus.OK
