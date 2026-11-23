@@ -51,5 +51,7 @@ class Result:
     diving_score: Optional[float] = None
     status: ResultStatus = ResultStatus.OK
     official_time_cs: Optional[int] = None
+    manual_place: Optional[int] = None  # Official Judge's Decision (JD) override
+    override_note: str = ""             # Optional note for the override
     place: Optional[int] = None
     points: float = 0.0
