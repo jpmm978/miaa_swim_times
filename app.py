@@ -10,6 +10,7 @@ try:
     from report_export import (
         export_event_pair_timer_sheets_html,
         export_heat_sheet_html,
+        export_lane_event_pair_sheets_html,
         export_lane_timer_sheets_html,
         export_meet_html,
     )
@@ -17,6 +18,7 @@ except ImportError:
     from reports_exports import (  # type: ignore[no-redef]
         export_event_pair_timer_sheets_html,
         export_heat_sheet_html,
+        export_lane_event_pair_sheets_html,
         export_lane_timer_sheets_html,
         export_meet_html,
     )
@@ -1638,10 +1640,16 @@ with tab_lineup:
         "Show Division", ["All", "Girls", "Boys"], horizontal=True, key="lineup_div_filter"
     )
 
-    only_populated_cards = st.checkbox(
+    opt_col1, opt_col2 = st.columns(2)
+    only_populated_cards = opt_col1.checkbox(
         "Only print Event Timer Cards for events with lineups or results",
         value=False,
         key="only_populated_timer_cards",
+    )
+    only_populated_lane_pairs = opt_col2.checkbox(
+        "Only print Lane Event-Pair Sheets for populated event pairs",
+        value=False,
+        key="only_populated_lane_pair_sheets",
     )
 
     heat_sheet_html = export_heat_sheet_html(
@@ -1686,6 +1694,23 @@ with tab_lineup:
         label="Event Timer Cards (G/B)",
         data=pair_timer_sheets_html,
         file_name=f"event_timer_cards_{team_a}_vs_{team_b}.html".replace(" ", "_"),
+        mime="text/html",
+        use_container_width=True,
+    )
+
+    lane_pair_sheets_html = export_lane_event_pair_sheets_html(
+        team_a=team_a,
+        team_b=team_b,
+        events=STANDARD_EVENTS,
+        lineups=lineups,
+        only_populated=only_populated_lane_pairs,
+        entries=entries,
+        results=results,
+    )
+    st.download_button(
+        label="Lane Event-Pair Sheets (1 Page/Lane, Ev 1–24)",
+        data=lane_pair_sheets_html,
+        file_name=f"lane_event_pair_sheets_{team_a}_vs_{team_b}.html".replace(" ", "_"),
         mime="text/html",
         use_container_width=True,
     )
