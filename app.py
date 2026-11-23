@@ -1041,7 +1041,7 @@ with tab_scoring:
                 "Use JD only for an official Judge's Decision place override."
             )
 
-        with st.form(f"heat_grid_ev_{selected_event.event_number}", clear_on_submit=True):
+        with st.form(f"heat_grid_ev_{selected_event.event_number}_h{selected_heat}", clear_on_submit=True):
             if is_relay:
                 col_spec = [0.45, 1.3, 0.55, 2.1, 1.0, 1.4, 0.85, 0.75, 0.45, 0.5]
                 headers = [
@@ -1080,7 +1080,7 @@ with tab_scoring:
 
             for lane in range(1, 7):
                 cols = st.columns(col_spec)
-                saved = lineups.get((selected_event.event_number, lane), {}) if selected_heat == 1 else {}
+                saved = lineups.get((selected_event.event_number, selected_heat, lane), {})
                 default_team_idx = 0 if lane % 2 == 0 else 1  # Even = Home, Odd = Visitor
                 if saved.get("team_id") in teams:
                     default_team_idx = teams.index(saved["team_id"])
@@ -1598,8 +1598,9 @@ with tab_scoring:
 with tab_lineup:
     st.subheader("Batch Lineup & Seeding")
     st.caption(
-        "Assign swimmers and lanes across all swimming events. "
-        "Saved lineups automatically pre-fill the Event Scoring tab and are checked against NFHS Rule 3-2-1 (max 4 total / 2 individual)."
+        "Assign swimmers and lanes across multiple heats per swimming event. "
+        "Heat 1 is the scoring heat; Heat 2+ are automatically marked Exhibition. "
+        "Saved lineups pre-fill Event Scoring and print on Heat Sheets and Lane Timer Sheets."
     )
 
     lu_filter_col, lu_heat_col, lu_timer_col = st.columns([2.2, 1.4, 1.4])
@@ -1655,98 +1656,145 @@ with tab_lineup:
             g_label = "Girls" if ev.gender == "F" else "Boys"
             is_rly = ev.event_type == EventType.RELAY
 
-            with st.expander(f"Event {ev.event_number}: {g_label} {ev.name}", expanded=False):
-                for lane in range(1, 7):
-                    saved = lineups.get((ev.event_number, lane), {})
-                    default_team_idx = 0 if lane % 2 == 0 else 1
-                    if saved.get("team_id") in teams:
-                        default_team_idx = teams.index(saved["team_id"])
+            saved_heats = [
+                h
+                for (ev_num, h, _l), d in lineups.items()
+                if ev_num == ev.event_number and d.get("athlete_ids")
+            ]
+            default_heat_count = max(saved_heats) if saved_heats else 1
+            hc_key = f"lu_heat_count_ev{ev.event_number}"
+            if hc_key not in st.session_state:
+                st.session_state[hc_key] = default_heat_count
 
-                    if is_rly:
-                        c_lane, c_team, c_rly, c_swimmer, c_exh = st.columns([0.5, 1.3, 0.55, 2.7, 0.55])
-                    else:
-                        c_lane, c_team, c_swimmer, c_exh = st.columns([0.5, 1.4, 3.1, 0.6])
+            with st.expander(
+                f"Event {ev.event_number}: {g_label} {ev.name} "
+                f"({st.session_state[hc_key]} Heat{'s' if st.session_state[hc_key] > 1 else ''})",
+                expanded=st.session_state[hc_key] > 1,
+            ):
+                num_heats = st.selectbox(
+                    "Number of Heats to Seed",
+                    options=HEAT_OPTIONS,
+                    key=hc_key,
+                    format_func=lambda n: f"{n} Heat" if n == 1 else f"{n} Heats (Heat 2+ Exhibition)",
+                )
 
-                    c_lane.markdown(f"**L{lane}**")
-
-                    l_team = c_team.selectbox(
-                        "Team",
-                        teams,
-                        index=default_team_idx,
-                        key=f"lu_ev{ev.event_number}_l{lane}_team",
-                        label_visibility="collapsed",
+                for heat_num in range(1, num_heats + 1):
+                    heat_label = (
+                        f"Heat {heat_num} (Scoring)"
+                        if heat_num == 1
+                        else f"Heat {heat_num} (Exhibition)"
                     )
-                    lane_roster = rosters.get((l_team, ev.gender), [])
-                    saved_names = saved.get("athlete_ids", [])
+                    st.markdown(f"**{heat_label}**")
 
-                    if is_rly:
-                        l_relay = c_rly.text_input(
-                            "Rly",
-                            value=saved.get("relay_letter") or "A",
-                            key=f"lu_ev{ev.event_number}_l{lane}_rly",
+                    for lane in range(1, 7):
+                        saved = lineups.get((ev.event_number, heat_num, lane), {})
+                        default_team_idx = 0 if lane % 2 == 0 else 1
+                        if saved.get("team_id") in teams:
+                            default_team_idx = teams.index(saved["team_id"])
+
+                        if is_rly:
+                            c_lane, c_team, c_rly, c_swimmer, c_exh = st.columns(
+                                [0.5, 1.3, 0.55, 2.7, 0.55]
+                            )
+                        else:
+                            c_lane, c_team, c_swimmer, c_exh = st.columns([0.5, 1.4, 3.1, 0.6])
+
+                        c_lane.markdown(f"**L{lane}**")
+
+                        l_team = c_team.selectbox(
+                            "Team",
+                            teams,
+                            index=default_team_idx,
+                            key=f"lu_ev{ev.event_number}_h{heat_num}_l{lane}_team",
                             label_visibility="collapsed",
                         )
-                        if lane_roster:
-                            l_names = c_swimmer.multiselect(
-                                "Swimmers",
-                                options=lane_roster,
-                                default=[n for n in saved_names if n in lane_roster],
-                                max_selections=4,
-                                placeholder="Select 4 swimmers...",
-                                key=f"lu_ev{ev.event_number}_l{lane}_names",
-                                label_visibility="collapsed",
-                            )
-                        else:
-                            raw_rly = c_swimmer.text_input(
-                                "Swimmers",
-                                value=", ".join(saved_names),
-                                placeholder="Smith, Jones, Lee, Patel",
-                                key=f"lu_ev{ev.event_number}_l{lane}_names",
-                                label_visibility="collapsed",
-                            )
-                            l_names = [n.strip() for n in raw_rly.split(",") if n.strip()]
-                    else:
-                        l_relay = None
-                        if lane_roster:
-                            opts = [""] + lane_roster
-                            saved_single = (
-                                saved_names[0] if saved_names and saved_names[0] in opts else ""
-                            )
-                            picked = c_swimmer.selectbox(
-                                "Swimmer",
-                                options=opts,
-                                index=opts.index(saved_single),
-                                key=f"lu_ev{ev.event_number}_l{lane}_names",
-                                label_visibility="collapsed",
-                            )
-                            l_names = [picked] if picked else []
-                        else:
-                            raw_ind = c_swimmer.text_input(
-                                "Swimmer",
-                                value=saved_names[0] if saved_names else "",
-                                placeholder="Last, First",
-                                key=f"lu_ev{ev.event_number}_l{lane}_names",
-                                label_visibility="collapsed",
-                            )
-                            l_names = [raw_ind.strip()] if raw_ind.strip() else []
+                        lane_roster = rosters.get((l_team, ev.gender), [])
+                        saved_names = saved.get("athlete_ids", [])
 
-                    l_exh = c_exh.checkbox(
-                        "Exh",
-                        value=saved.get("is_exhibition", False),
-                        key=f"lu_ev{ev.event_number}_l{lane}_exh",
-                        label_visibility="collapsed",
-                    )
+                        if is_rly:
+                            l_relay = c_rly.text_input(
+                                "Rly",
+                                value=saved.get("relay_letter") or "A",
+                                key=f"lu_ev{ev.event_number}_h{heat_num}_l{lane}_rly",
+                                label_visibility="collapsed",
+                            )
+                            if lane_roster:
+                                l_names = c_swimmer.multiselect(
+                                    "Swimmers",
+                                    options=lane_roster,
+                                    default=[n for n in saved_names if n in lane_roster],
+                                    max_selections=4,
+                                    placeholder="Select 4 swimmers...",
+                                    key=f"lu_ev{ev.event_number}_h{heat_num}_l{lane}_names",
+                                    label_visibility="collapsed",
+                                )
+                            else:
+                                raw_rly = c_swimmer.text_input(
+                                    "Swimmers",
+                                    value=", ".join(saved_names),
+                                    placeholder="Smith, Jones, Lee, Patel",
+                                    key=f"lu_ev{ev.event_number}_h{heat_num}_l{lane}_names",
+                                    label_visibility="collapsed",
+                                )
+                                l_names = [n.strip() for n in raw_rly.split(",") if n.strip()]
+                        else:
+                            l_relay = None
+                            if lane_roster:
+                                opts = [""] + lane_roster
+                                saved_single = (
+                                    saved_names[0] if saved_names and saved_names[0] in opts else ""
+                                )
+                                picked = c_swimmer.selectbox(
+                                    "Swimmer",
+                                    options=opts,
+                                    index=opts.index(saved_single),
+                                    key=f"lu_ev{ev.event_number}_h{heat_num}_l{lane}_names",
+                                    label_visibility="collapsed",
+                                )
+                                l_names = [picked] if picked else []
+                            else:
+                                raw_ind = c_swimmer.text_input(
+                                    "Swimmer",
+                                    value=saved_names[0] if saved_names else "",
+                                    placeholder="Last, First",
+                                    key=f"lu_ev{ev.event_number}_h{heat_num}_l{lane}_names",
+                                    label_visibility="collapsed",
+                                )
+                                l_names = [raw_ind.strip()] if raw_ind.strip() else []
 
-                    pending_lineups.append(
-                        {
-                            "event_number": ev.event_number,
-                            "lane": lane,
-                            "team_id": l_team,
-                            "athlete_ids": l_names,
-                            "relay_letter": l_relay.strip() if l_relay else None,
-                            "is_exhibition": l_exh,
-                        }
-                    )
+                        l_exh = c_exh.checkbox(
+                            "Exh",
+                            value=bool(saved.get("is_exhibition", False)) or (heat_num > 1),
+                            key=f"lu_ev{ev.event_number}_h{heat_num}_l{lane}_exh",
+                            label_visibility="collapsed",
+                        )
+
+                        pending_lineups.append(
+                            {
+                                "event_number": ev.event_number,
+                                "heat_number": heat_num,
+                                "lane": lane,
+                                "team_id": l_team,
+                                "athlete_ids": l_names,
+                                "relay_letter": l_relay.strip() if l_relay else None,
+                                "is_exhibition": bool(l_exh) or (heat_num > 1),
+                            }
+                        )
+
+                # Clear any higher-numbered heats if user reduced heat count
+                for extra_heat in range(num_heats + 1, max(HEAT_OPTIONS) + 1):
+                    for lane in range(1, 7):
+                        pending_lineups.append(
+                            {
+                                "event_number": ev.event_number,
+                                "heat_number": extra_heat,
+                                "lane": lane,
+                                "team_id": team_a,
+                                "athlete_ids": [],
+                                "relay_letter": None,
+                                "is_exhibition": True,
+                            }
+                        )
 
         override_lineup_limits = st.checkbox(
             "Override NFHS entry limit warnings for this lineup"
@@ -1758,7 +1806,7 @@ with tab_lineup:
         if submitted_lineups:
             merged_lineups = dict(lineups)
             for row in pending_lineups:
-                key = (row["event_number"], row["lane"])
+                key = (row["event_number"], row["heat_number"], row["lane"])
                 if row["athlete_ids"]:
                     merged_lineups[key] = row
                 else:
@@ -1766,14 +1814,15 @@ with tab_lineup:
 
             projected_lineup_entries = [
                 Entry(
-                    entry_id=f"lu_{ev_num}_{lane}",
+                    entry_id=f"lu_{ev_num}_h{h_num}_{lane}",
                     event_number=ev_num,
                     team_id=data["team_id"],
                     athlete_ids=data["athlete_ids"],
-                    is_exhibition=data.get("is_exhibition", False),
+                    is_exhibition=bool(data.get("is_exhibition", False)) or (h_num > 1),
                     relay_letter=data.get("relay_letter"),
+                    heat_number=h_num,
                 )
-                for (ev_num, lane), data in merged_lineups.items()
+                for (ev_num, h_num, lane), data in merged_lineups.items()
                 if data.get("athlete_ids")
             ]
 
@@ -1806,7 +1855,7 @@ with tab_lineup:
     ):
         clear_lineups(active_meet_id)
         for key in list(st.session_state.keys()):
-            if key.startswith("lu_ev"):
+            if key.startswith("lu_"):
                 del st.session_state[key]
         st.rerun()
 
