@@ -185,6 +185,160 @@ def init_db() -> None:
             )
 
 
+def export_full_backup_json() -> str:
+    """Exports all meets, entries, results, rosters, lineups, and signatures as JSON."""
+    with _get_conn() as conn:
+        payload = {
+            "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "meets": [dict(r) for r in conn.execute("SELECT * FROM meets").fetchall()],
+            "meet_meta": [dict(r) for r in conn.execute("SELECT * FROM meet_meta").fetchall()],
+            "entries": [dict(r) for r in conn.execute("SELECT * FROM entries").fetchall()],
+            "results": [dict(r) for r in conn.execute("SELECT * FROM results").fetchall()],
+            "roster": [dict(r) for r in conn.execute("SELECT * FROM roster").fetchall()],
+            "lineups": [dict(r) for r in conn.execute("SELECT * FROM lineups").fetchall()],
+            "meet_signatures": [
+                dict(r) for r in conn.execute("SELECT * FROM meet_signatures").fetchall()
+            ],
+        }
+    return json.dumps(payload, indent=2)
+
+
+def restore_full_backup_json(raw_json: str) -> tuple[bool, str]:
+    """Restores a previously exported backup JSON snapshot into SQLite."""
+    try:
+        data = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        return False, f"Invalid JSON file: {exc}"
+
+    if not isinstance(data, dict) or "meets" not in data:
+        return False, "Backup file is missing required meet data."
+
+    now_iso = datetime.now().strftime("%Y-%m-%d %H:%M")
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM results")
+        conn.execute("DELETE FROM entries")
+        conn.execute("DELETE FROM lineups")
+        conn.execute("DELETE FROM meet_signatures")
+        conn.execute("DELETE FROM roster")
+        conn.execute("DELETE FROM meets")
+        conn.execute("DELETE FROM meet_meta")
+
+        for m in data.get("meets", []):
+            conn.execute(
+                """
+                INSERT INTO meets (meet_id, title, team_a, team_b, status, created_at, closed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    m.get("meet_id") or "default_meet",
+                    m.get("title") or "Restored Meet",
+                    m.get("team_a") or "Home Team",
+                    m.get("team_b") or "Visiting Team",
+                    m.get("status") or "ACTIVE",
+                    m.get("created_at") or now_iso,
+                    m.get("closed_at"),
+                ),
+            )
+
+        for mm in data.get("meet_meta", []):
+            if mm.get("key") is not None and mm.get("value") is not None:
+                conn.execute(
+                    "INSERT INTO meet_meta (key, value) VALUES (?, ?)",
+                    (mm["key"], mm["value"]),
+                )
+
+        for r in data.get("roster", []):
+            conn.execute(
+                "INSERT INTO roster (team_id, name, gender) VALUES (?, ?, ?)",
+                (r["team_id"], r["name"], r["gender"]),
+            )
+
+        for e in data.get("entries", []):
+            conn.execute(
+                """
+                INSERT INTO entries (
+                    entry_id, meet_id, event_number, team_id, athlete_ids, is_exhibition, relay_letter
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    e["entry_id"],
+                    e.get("meet_id") or "default_meet",
+                    e["event_number"],
+                    e["team_id"],
+                    e["athlete_ids"]
+                    if isinstance(e["athlete_ids"], str)
+                    else json.dumps(e["athlete_ids"]),
+                    int(bool(e.get("is_exhibition", 0))),
+                    e.get("relay_letter"),
+                ),
+            )
+
+        for res in data.get("results", []):
+            conn.execute(
+                """
+                INSERT INTO results (
+                    entry_id, watch_time_cs, backup_times_cs, diving_score,
+                    status, official_time_cs, manual_place, override_note
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    res["entry_id"],
+                    res.get("watch_time_cs"),
+                    res.get("backup_times_cs")
+                    if isinstance(res.get("backup_times_cs"), str)
+                    else json.dumps(res.get("backup_times_cs") or []),
+                    res.get("diving_score"),
+                    res.get("status") or "OK",
+                    res.get("official_time_cs"),
+                    res.get("manual_place"),
+                    res.get("override_note") or "",
+                ),
+            )
+
+        for lu in data.get("lineups", []):
+            conn.execute(
+                """
+                INSERT INTO lineups (
+                    meet_id, event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    lu.get("meet_id") or "default_meet",
+                    lu["event_number"],
+                    lu["lane"],
+                    lu["team_id"],
+                    lu["athlete_ids"]
+                    if isinstance(lu["athlete_ids"], str)
+                    else json.dumps(lu["athlete_ids"]),
+                    lu.get("relay_letter"),
+                    int(bool(lu.get("is_exhibition", 0))),
+                ),
+            )
+
+        for sig in data.get("meet_signatures", []):
+            conn.execute(
+                """
+                INSERT INTO meet_signatures (
+                    meet_id, role_key, signer_name, signature_data_url, signed_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    sig["meet_id"],
+                    sig["role_key"],
+                    sig.get("signer_name") or "",
+                    sig["signature_data_url"],
+                    sig.get("signed_at") or now_iso,
+                ),
+            )
+
+    init_db()
+    return True, f"Restored {len(data.get('meets', []))} meet(s) from backup."
+
+
 def save_meet_signature(
     meet_id: str,
     role_key: str,
