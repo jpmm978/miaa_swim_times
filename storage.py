@@ -141,6 +141,7 @@ def save_entry_and_result(entry: Entry, result: Result) -> None:
             ),
         )
 
+
 def update_result_override(
     entry_id: str,
     manual_place: int | None,
@@ -156,6 +157,8 @@ def update_result_override(
             """,
             (manual_place, override_note.strip(), entry_id),
         )
+
+
 def load_all_data() -> tuple[list[Entry], list[Result]]:
     with _get_conn() as conn:
         entry_rows = conn.execute("SELECT * FROM entries").fetchall()
