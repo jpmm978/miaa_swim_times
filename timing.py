@@ -20,13 +20,13 @@ def format_cs_to_time(cs: int) -> str:
 
 
 def calculate_official_time(
-    pad_time_cs: Optional[int],
+    watch_time_cs: Optional[int],
     backup_times_cs: list[int],
-    pad_malfunction: bool = False,
+    watch_malfunction: bool = False,
 ) -> Optional[int]:
     """NFHS Rule 6 timing hierarchy."""
-    if pad_time_cs is not None and not pad_malfunction:
-        return pad_time_cs
+    if watch_time_cs is not None and not watch_malfunction:
+        return watch_time_cs
 
     valid_backups = sorted(t for t in backup_times_cs if t > 0)
     count = len(valid_backups)
