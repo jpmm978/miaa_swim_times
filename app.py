@@ -8,6 +8,7 @@ import streamlit.components.v1 as components
 from models import Entry, Event, EventType, Result, ResultStatus
 try:
     from reports_exports import (
+        export_event_pair_timer_sheets_html,
         export_heat_sheet_html,
         export_lane_timer_sheets_html,
         export_meet_html,
@@ -18,6 +19,15 @@ except ImportError:
         export_lane_timer_sheets_html,
         export_meet_html,
     )
+
+    def export_event_pair_timer_sheets_html(  # type: ignore[no-redef]
+        team_a: str,
+        team_b: str,
+        events: list[Event],
+        lineups: dict,
+        meet_date=None,
+    ) -> str:
+        return export_lane_timer_sheets_html(team_a, team_b, events, lineups)
 from scoring import MeetFormat, score_event
 from sdif_export import export_meet_sd3
 from storage import (
@@ -1631,7 +1641,7 @@ with tab_lineup:
         "Saved lineups pre-fill Event Scoring and print on Heat Sheets and Lane Timer Sheets."
     )
 
-    lu_filter_col, lu_heat_col, lu_timer_col = st.columns([2.2, 1.4, 1.4])
+    lu_filter_col, lu_heat_col, lu_timer_col, lu_pair_col = st.columns([1.8, 1.2, 1.3, 1.4])
     lineup_div = lu_filter_col.radio(
         "Show Division", ["All", "Girls", "Boys"], horizontal=True, key="lineup_div_filter"
     )
@@ -1658,9 +1668,23 @@ with tab_lineup:
         lineups=lineups,
     )
     lu_timer_col.download_button(
-        label="Export Lane Timer Sheets (HTML)",
+        label="Lane Timer Sheets (HTML)",
         data=timer_sheets_html,
         file_name=f"lane_timer_sheets_{team_a}_vs_{team_b}.html".replace(" ", "_"),
+        mime="text/html",
+        use_container_width=True,
+    )
+
+    pair_timer_sheets_html = export_event_pair_timer_sheets_html(
+        team_a=team_a,
+        team_b=team_b,
+        events=STANDARD_EVENTS,
+        lineups=lineups,
+    )
+    lu_pair_col.download_button(
+        label="Event Timer Cards (G/B)",
+        data=pair_timer_sheets_html,
+        file_name=f"event_timer_cards_{team_a}_vs_{team_b}.html".replace(" ", "_"),
         mime="text/html",
         use_container_width=True,
     )
