@@ -256,9 +256,9 @@ def export_meet_html(
     .event-block h3 {{
       margin: 0 0 2px 0;
       font-size: 10px;
-      background: #eee;
+      background: #e2e8f0;
       padding: 2px 5px;
-      border-left: 3px solid #222;
+      border-left: 3px solid #0f766e;
     }}
     table {{
       width: 100%;
@@ -273,8 +273,15 @@ def export_meet_html(
     th {{
       font-size: 8px;
       text-transform: uppercase;
-      color: #555;
-      border-bottom: 1px solid #999;
+      color: #475569;
+      background: #f8fafc;
+      border-bottom: 1px solid #94a3b8;
+    }}
+    tbody tr:nth-child(odd) {{
+      background-color: #ffffff;
+    }}
+    tbody tr:nth-child(even) {{
+      background-color: #f4f6f9;
     }}
     .num {{
       text-align: right;
@@ -329,7 +336,7 @@ def export_meet_html(
     }}
     @media print {{
       body {{ margin: 0; padding: 0; max-width: 100%; }}
-      .score-banner, .event-block h3 {{
+      .score-banner, .event-block h3, th, tbody tr:nth-child(even) {{
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }}
@@ -488,9 +495,9 @@ def export_heat_sheet_html(
     .event-block h3 {{
       margin: 0 0 6px 0;
       font-size: 14px;
-      background: #eee;
+      background: #e2e8f0;
       padding: 4px 8px;
-      border-left: 4px solid #222;
+      border-left: 4px solid #0f766e;
     }}
     table {{
       width: 100%;
@@ -504,14 +511,24 @@ def export_heat_sheet_html(
     th {{
       font-size: 11px;
       text-transform: uppercase;
-      color: #555;
-      border-bottom: 1px solid #999;
+      color: #475569;
+      background: #f8fafc;
+      border-bottom: 1px solid #94a3b8;
+    }}
+    tbody tr:nth-child(odd) {{
+      background-color: #ffffff;
+    }}
+    tbody tr:nth-child(even) {{
+      background-color: #f4f6f9;
     }}
     .center {{ text-align: center; }}
     .write-in {{ border-left: 1px solid #ddd; }}
     @media print {{
       body {{ margin: 0; max-width: 100%; }}
-      .event-block h3 {{ background: #f2f2f2; -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+      .event-block h3, th, tbody tr:nth-child(even) {{
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }}
     }}
   </style>
 </head>
@@ -700,8 +717,14 @@ def export_lane_timer_sheets_html(
     th {{
       font-size: 10px;
       text-transform: uppercase;
-      background: #eee;
-      color: #222;
+      background: #e2e8f0;
+      color: #1e293b;
+    }}
+    tbody tr:nth-child(odd) {{
+      background-color: #ffffff;
+    }}
+    tbody tr:nth-child(even) {{
+      background-color: #f4f6f9;
     }}
     td.swimmer {{
       font-size: 10.5px;
@@ -710,15 +733,15 @@ def export_lane_timer_sheets_html(
       height: 19px;
     }}
     tr.diving-row td {{
-      background: #f3f3f3;
-      color: #555;
+      background-color: #e9edf2;
+      color: #475569;
       padding: 3px 5px;
     }}
     .center {{ text-align: center; }}
     @media print {{
       body {{ padding: 0; }}
       .lane-page {{ max-width: 100%; margin: 0; }}
-      th, tr.diving-row td {{
+      th, tbody tr:nth-child(even), tr.diving-row td {{
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }}
