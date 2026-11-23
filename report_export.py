@@ -53,10 +53,19 @@ def export_meet_html(
             else:
                 participant = ", ".join(ent.athlete_ids)
 
-            place_str = str(res.place) if res.place is not None else "—"
-            status_badge = res.status.value if res.status.value != "OK" else ""
+            if res.place is not None:
+                place_str = f"{res.place} (JD)" if res.manual_place is not None else str(res.place)
+            else:
+                place_str = "—"
+
+            notes: list[str] = []
+            if res.status.value != "OK":
+                notes.append(res.status.value)
             if ent.is_exhibition:
-                status_badge = f"{status_badge} EXH".strip()
+                notes.append("EXH")
+            if res.override_note:
+                notes.append(res.override_note)
+            status_badge = " ".join(notes)
 
             pts_str = f"{res.points:g}" if res.points > 0 else "—"
 
@@ -78,9 +87,9 @@ def export_meet_html(
               <table>
                 <thead>
                   <tr>
-                    <th class="num" style="width: 7%;">Place</th>
+                    <th class="num" style="width: 10%;">Place</th>
                     <th style="width: 22%;">Team</th>
-                    <th style="width: 39%;">Participant</th>
+                    <th style="width: 36%;">Participant</th>
                     <th class="num" style="width: 14%;">Official</th>
                     <th class="center" style="width: 10%;">Note</th>
                     <th class="num" style="width: 8%;">Pts</th>
