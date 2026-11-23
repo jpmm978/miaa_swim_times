@@ -17,7 +17,7 @@ def _get_conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Creates tables if they do not already exist."""
+    """Creates tables if they do not already exist and migrates older schemas."""
     with _get_conn() as conn:
         conn.execute(
             """
@@ -48,6 +48,8 @@ def init_db() -> None:
                 diving_score REAL,
                 status TEXT NOT NULL,
                 official_time_cs INTEGER,
+                manual_place INTEGER,
+                override_note TEXT NOT NULL DEFAULT '',
                 FOREIGN KEY (entry_id) REFERENCES entries (entry_id) ON DELETE CASCADE
             )
             """
@@ -62,6 +64,18 @@ def init_db() -> None:
             )
             """
         )
+
+        # Safe migration for existing swim_meet.db files
+        existing_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(results)").fetchall()
+        }
+        if "manual_place" not in existing_cols:
+            conn.execute("ALTER TABLE results ADD COLUMN manual_place INTEGER")
+        if "override_note" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE results ADD COLUMN override_note TEXT NOT NULL DEFAULT ''"
+            )
+
         conn.execute(
             "INSERT OR IGNORE INTO meet_meta (key, value) VALUES ('team_a', 'Home Team')"
         )
@@ -109,8 +123,11 @@ def save_entry_and_result(entry: Entry, result: Result) -> None:
         )
         conn.execute(
             """
-            INSERT INTO results (entry_id, pad_time_cs, backup_times_cs, diving_score, status, official_time_cs)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO results (
+                entry_id, pad_time_cs, backup_times_cs, diving_score,
+                status, official_time_cs, manual_place, override_note
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result.entry_id,
@@ -119,6 +136,8 @@ def save_entry_and_result(entry: Entry, result: Result) -> None:
                 result.diving_score,
                 result.status.value,
                 result.official_time_cs,
+                result.manual_place,
+                result.override_note,
             ),
         )
 
@@ -147,6 +166,8 @@ def load_all_data() -> tuple[list[Entry], list[Result]]:
             diving_score=r["diving_score"],
             status=ResultStatus(r["status"]),
             official_time_cs=r["official_time_cs"],
+            manual_place=r["manual_place"],
+            override_note=r["override_note"] or "",
         )
         for r in result_rows
     ]
@@ -254,6 +275,7 @@ def export_meet_csv(
             "Gender",
             "Event Name",
             "Place",
+            "JD Override",
             "Team",
             "Participant",
             "Official Time / Score",
@@ -279,6 +301,7 @@ def export_meet_csv(
                 "Gender": "Girls" if ev.gender == "F" else "Boys",
                 "Event Name": ev.name,
                 "Place": res.place if res.place is not None else "",
+                "JD Override": "Yes" if res.manual_place is not None else "",
                 "Team": ent.team_id,
                 "Participant": ", ".join(ent.athlete_ids),
                 "Official Time / Score": perf,
