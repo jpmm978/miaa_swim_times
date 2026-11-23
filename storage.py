@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +15,7 @@ DB_PATH = Path("swim_meet.db")
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -27,8 +29,22 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_def: s
 
 
 def init_db() -> None:
-    """Creates tables if they do not already exist and migrates missing columns."""
+    """Creates tables if they do not already exist and migrates existing data to multi-meet support."""
+    now_iso = datetime.now().strftime("%Y-%m-%d %H:%M")
     with _get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS meets (
+                meet_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                team_a TEXT NOT NULL DEFAULT 'Home Team',
+                team_b TEXT NOT NULL DEFAULT 'Visiting Team',
+                status TEXT NOT NULL DEFAULT 'ACTIVE',
+                created_at TEXT NOT NULL,
+                closed_at TEXT
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS meet_meta (
@@ -41,6 +57,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS entries (
                 entry_id TEXT PRIMARY KEY,
+                meet_id TEXT NOT NULL DEFAULT 'default_meet',
                 event_number INTEGER NOT NULL,
                 team_id TEXT NOT NULL,
                 athlete_ids TEXT NOT NULL,
@@ -77,17 +94,19 @@ def init_db() -> None:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS lineups (
+                meet_id TEXT NOT NULL DEFAULT 'default_meet',
                 event_number INTEGER NOT NULL,
                 lane INTEGER NOT NULL,
                 team_id TEXT NOT NULL,
                 athlete_ids TEXT NOT NULL,
                 relay_letter TEXT,
                 is_exhibition INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (event_number, lane)
+                PRIMARY KEY (meet_id, event_number, lane)
             )
             """
         )
 
+        # Safe migrations for older SQLite databases
         _ensure_column(conn, "results", "watch_time_cs", "INTEGER")
         _ensure_column(conn, "results", "backup_times_cs", "TEXT NOT NULL DEFAULT '[]'")
         _ensure_column(conn, "results", "diving_score", "REAL")
@@ -95,6 +114,38 @@ def init_db() -> None:
         _ensure_column(conn, "results", "official_time_cs", "INTEGER")
         _ensure_column(conn, "results", "manual_place", "INTEGER")
         _ensure_column(conn, "results", "override_note", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "entries", "meet_id", "TEXT NOT NULL DEFAULT 'default_meet'")
+
+        # Migrate pre-existing lineups table if its primary key was only (event_number, lane)
+        lineup_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(lineups)").fetchall()
+        }
+        if "meet_id" not in lineup_cols:
+            conn.execute("ALTER TABLE lineups RENAME TO lineups_old")
+            conn.execute(
+                """
+                CREATE TABLE lineups (
+                    meet_id TEXT NOT NULL DEFAULT 'default_meet',
+                    event_number INTEGER NOT NULL,
+                    lane INTEGER NOT NULL,
+                    team_id TEXT NOT NULL,
+                    athlete_ids TEXT NOT NULL,
+                    relay_letter TEXT,
+                    is_exhibition INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (meet_id, event_number, lane)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO lineups (
+                    meet_id, event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                )
+                SELECT 'default_meet', event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                FROM lineups_old
+                """
+            )
+            conn.execute("DROP TABLE lineups_old")
 
         conn.execute(
             "INSERT OR IGNORE INTO meet_meta (key, value) VALUES ('team_a', 'Home Team')"
@@ -103,16 +154,217 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO meet_meta (key, value) VALUES ('team_b', 'Visiting Team')"
         )
 
+        meta_rows = dict(conn.execute("SELECT key, value FROM meet_meta").fetchall())
+        legacy_a = meta_rows.get("team_a", "Home Team")
+        legacy_b = meta_rows.get("team_b", "Visiting Team")
 
-def load_team_names() -> tuple[str, str]:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO meets (meet_id, title, team_a, team_b, status, created_at, closed_at)
+            VALUES ('default_meet', ?, ?, ?, 'ACTIVE', ?, NULL)
+            """,
+            (f"{legacy_a} vs {legacy_b}", legacy_a, legacy_b, now_iso),
+        )
+
+        active_row = conn.execute(
+            "SELECT value FROM meet_meta WHERE key = 'active_meet_id'"
+        ).fetchone()
+        if not active_row:
+            conn.execute(
+                "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('active_meet_id', 'default_meet')"
+            )
+
+
+def list_meets() -> list[dict]:
+    """Returns all saved meets ordered by active status first, then most recently created."""
     with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT meet_id, title, team_a, team_b, status, created_at, closed_at
+            FROM meets
+            ORDER BY CASE WHEN status = 'ACTIVE' THEN 0 ELSE 1 END, created_at DESC
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_active_meet_id() -> str:
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT value FROM meet_meta WHERE key = 'active_meet_id'"
+        ).fetchone()
+        if row and row["value"]:
+            exists = conn.execute(
+                "SELECT 1 FROM meets WHERE meet_id = ?", (row["value"],)
+            ).fetchone()
+            if exists:
+                return row["value"]
+        first = conn.execute("SELECT meet_id FROM meets LIMIT 1").fetchone()
+        fallback = first["meet_id"] if first else "default_meet"
+        conn.execute(
+            "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('active_meet_id', ?)",
+            (fallback,),
+        )
+        return fallback
+
+
+def set_active_meet(meet_id: str) -> None:
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT team_a, team_b FROM meets WHERE meet_id = ?", (meet_id,)
+        ).fetchone()
+        if not row:
+            return
+        conn.execute(
+            "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('active_meet_id', ?)",
+            (meet_id,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('team_a', ?)",
+            (row["team_a"],),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('team_b', ?)",
+            (row["team_b"],),
+        )
+
+
+def create_new_meet(
+    meet_id: str,
+    title: str,
+    team_a: str,
+    team_b: str,
+    copy_lineups_from_current: bool = False,
+) -> str:
+    """Creates a new active meet and switches to it."""
+    now_iso = datetime.now().strftime("%Y-%m-%d %H:%M")
+    clean_a = team_a.strip() or "Home Team"
+    clean_b = team_b.strip() or "Visiting Team"
+    clean_title = title.strip() or f"{clean_a} vs {clean_b} ({now_iso})"
+    prev_meet_id = get_active_meet_id()
+
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO meets (meet_id, title, team_a, team_b, status, created_at, closed_at)
+            VALUES (?, ?, ?, ?, 'ACTIVE', ?, NULL)
+            """,
+            (meet_id, clean_title, clean_a, clean_b, now_iso),
+        )
+        if copy_lineups_from_current:
+            conn.execute(
+                """
+                INSERT INTO lineups (
+                    meet_id, event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                )
+                SELECT ?, event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                FROM lineups
+                WHERE meet_id = ?
+                """,
+                (meet_id, prev_meet_id),
+            )
+        conn.execute(
+            "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('active_meet_id', ?)",
+            (meet_id,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('team_a', ?)", (clean_a,)
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('team_b', ?)", (clean_b,)
+        )
+    return meet_id
+
+
+def set_meet_status(meet_id: str, status: str) -> None:
+    """Marks a meet as CLOSED or REOPENED ('ACTIVE')."""
+    normalized = "CLOSED" if status.upper() == "CLOSED" else "ACTIVE"
+    closed_at = datetime.now().strftime("%Y-%m-%d %H:%M") if normalized == "CLOSED" else None
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE meets SET status = ?, closed_at = ? WHERE meet_id = ?",
+            (normalized, closed_at, meet_id),
+        )
+
+
+def rename_meet(meet_id: str, new_title: str) -> None:
+    clean_title = new_title.strip()
+    if not clean_title:
+        return
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE meets SET title = ? WHERE meet_id = ?",
+            (clean_title, meet_id),
+        )
+
+
+def delete_meet(meet_id: str) -> None:
+    """Deletes a saved meet and its entries, results, and lineups; ensures an active meet remains."""
+    now_iso = datetime.now().strftime("%Y-%m-%d %H:%M")
+    with _get_conn() as conn:
+        conn.execute(
+            "DELETE FROM results WHERE entry_id IN (SELECT entry_id FROM entries WHERE meet_id = ?)",
+            (meet_id,),
+        )
+        conn.execute("DELETE FROM entries WHERE meet_id = ?", (meet_id,))
+        conn.execute("DELETE FROM lineups WHERE meet_id = ?", (meet_id,))
+        conn.execute("DELETE FROM meets WHERE meet_id = ?", (meet_id,))
+
+        remaining = conn.execute(
+            "SELECT meet_id, team_a, team_b FROM meets ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if remaining:
+            conn.execute(
+                "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('active_meet_id', ?)",
+                (remaining["meet_id"],),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('team_a', ?)",
+                (remaining["team_a"],),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('team_b', ?)",
+                (remaining["team_b"],),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO meets (meet_id, title, team_a, team_b, status, created_at, closed_at)
+                VALUES ('default_meet', 'Home Team vs Visiting Team', 'Home Team', 'Visiting Team', 'ACTIVE', ?, NULL)
+                """,
+                (now_iso,),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('active_meet_id', 'default_meet')"
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('team_a', 'Home Team')"
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('team_b', 'Visiting Team')"
+            )
+
+
+def load_team_names(meet_id: Optional[str] = None) -> tuple[str, str]:
+    target_id = meet_id or get_active_meet_id()
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT team_a, team_b FROM meets WHERE meet_id = ?", (target_id,)
+        ).fetchone()
+        if row:
+            return row["team_a"], row["team_b"]
         rows = dict(conn.execute("SELECT key, value FROM meet_meta").fetchall())
     return rows.get("team_a", "Home Team"), rows.get("team_b", "Visiting Team")
 
 
-def save_team_names(team_a: str, team_b: str) -> None:
-    old_a, old_b = load_team_names()
+def save_team_names(team_a: str, team_b: str, meet_id: Optional[str] = None) -> None:
+    target_id = meet_id or get_active_meet_id()
+    old_a, old_b = load_team_names(target_id)
     with _get_conn() as conn:
+        conn.execute(
+            "UPDATE meets SET team_a = ?, team_b = ? WHERE meet_id = ?",
+            (team_a, team_b, target_id),
+        )
         conn.execute(
             "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('team_a', ?)", (team_a,)
         )
@@ -121,21 +373,39 @@ def save_team_names(team_a: str, team_b: str) -> None:
         )
         if old_a != team_a:
             conn.execute("UPDATE roster SET team_id = ? WHERE team_id = ?", (team_a, old_a))
+            conn.execute(
+                "UPDATE entries SET team_id = ? WHERE meet_id = ? AND team_id = ?",
+                (team_a, target_id, old_a),
+            )
+            conn.execute(
+                "UPDATE lineups SET team_id = ? WHERE meet_id = ? AND team_id = ?",
+                (team_a, target_id, old_a),
+            )
         if old_b != team_b:
             conn.execute("UPDATE roster SET team_id = ? WHERE team_id = ?", (team_b, old_b))
+            conn.execute(
+                "UPDATE entries SET team_id = ? WHERE meet_id = ? AND team_id = ?",
+                (team_b, target_id, old_b),
+            )
+            conn.execute(
+                "UPDATE lineups SET team_id = ? WHERE meet_id = ? AND team_id = ?",
+                (team_b, target_id, old_b),
+            )
 
 
-def save_entry_and_result(entry: Entry, result: Result) -> None:
+def save_entry_and_result(entry: Entry, result: Result, meet_id: Optional[str] = None) -> None:
+    target_id = meet_id or get_active_meet_id()
     with _get_conn() as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO entries (
-                entry_id, event_number, team_id, athlete_ids, is_exhibition, relay_letter
+                entry_id, meet_id, event_number, team_id, athlete_ids, is_exhibition, relay_letter
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entry.entry_id,
+                target_id,
                 entry.event_number,
                 entry.team_id,
                 json.dumps(entry.athlete_ids),
@@ -186,10 +456,21 @@ def delete_entry_and_result(entry_id: str) -> None:
         conn.execute("DELETE FROM entries WHERE entry_id = ?", (entry_id,))
 
 
-def load_all_data() -> tuple[list[Entry], list[Result]]:
+def load_all_data(meet_id: Optional[str] = None) -> tuple[list[Entry], list[Result]]:
+    target_id = meet_id or get_active_meet_id()
     with _get_conn() as conn:
-        entry_rows = conn.execute("SELECT * FROM entries").fetchall()
-        result_rows = conn.execute("SELECT * FROM results").fetchall()
+        entry_rows = conn.execute(
+            "SELECT * FROM entries WHERE meet_id = ?", (target_id,)
+        ).fetchall()
+        result_rows = conn.execute(
+            """
+            SELECT r.*
+            FROM results r
+            INNER JOIN entries e ON r.entry_id = e.entry_id
+            WHERE e.meet_id = ?
+            """,
+            (target_id,),
+        ).fetchall()
 
     entries = [
         Entry(
@@ -233,7 +514,8 @@ def load_all_data() -> tuple[list[Entry], list[Result]]:
     return entries, results
 
 
-def save_lineups(lineup_rows: list[dict]) -> None:
+def save_lineups(lineup_rows: list[dict], meet_id: Optional[str] = None) -> None:
+    target_id = meet_id or get_active_meet_id()
     with _get_conn() as conn:
         for row in lineup_rows:
             ev_num = row["event_number"]
@@ -243,11 +525,12 @@ def save_lineups(lineup_rows: list[dict]) -> None:
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO lineups (
-                        event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                        meet_id, event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
                     )
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
+                        target_id,
                         ev_num,
                         lane,
                         row["team_id"],
@@ -258,14 +541,17 @@ def save_lineups(lineup_rows: list[dict]) -> None:
                 )
             else:
                 conn.execute(
-                    "DELETE FROM lineups WHERE event_number = ? AND lane = ?",
-                    (ev_num, lane),
+                    "DELETE FROM lineups WHERE meet_id = ? AND event_number = ? AND lane = ?",
+                    (target_id, ev_num, lane),
                 )
 
 
-def load_lineups() -> dict[tuple[int, int], dict]:
+def load_lineups(meet_id: Optional[str] = None) -> dict[tuple[int, int], dict]:
+    target_id = meet_id or get_active_meet_id()
     with _get_conn() as conn:
-        rows = conn.execute("SELECT * FROM lineups").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM lineups WHERE meet_id = ?", (target_id,)
+        ).fetchall()
 
     lineups: dict[tuple[int, int], dict] = {}
     for r in rows:
@@ -280,24 +566,38 @@ def load_lineups() -> dict[tuple[int, int], dict]:
     return lineups
 
 
-def clear_lineups() -> None:
+def clear_lineups(meet_id: Optional[str] = None) -> None:
+    target_id = meet_id or get_active_meet_id()
     with _get_conn() as conn:
-        conn.execute("DELETE FROM lineups")
+        conn.execute("DELETE FROM lineups WHERE meet_id = ?", (target_id,))
 
 
-def clear_event(event_number: int) -> None:
+def clear_event(event_number: int, meet_id: Optional[str] = None) -> None:
+    target_id = meet_id or get_active_meet_id()
     with _get_conn() as conn:
         conn.execute(
-            "DELETE FROM results WHERE entry_id IN (SELECT entry_id FROM entries WHERE event_number = ?)",
-            (event_number,),
+            """
+            DELETE FROM results
+            WHERE entry_id IN (
+                SELECT entry_id FROM entries WHERE meet_id = ? AND event_number = ?
+            )
+            """,
+            (target_id, event_number),
         )
-        conn.execute("DELETE FROM entries WHERE event_number = ?", (event_number,))
+        conn.execute(
+            "DELETE FROM entries WHERE meet_id = ? AND event_number = ?",
+            (target_id, event_number),
+        )
 
 
-def clear_all() -> None:
+def clear_all(meet_id: Optional[str] = None) -> None:
+    target_id = meet_id or get_active_meet_id()
     with _get_conn() as conn:
-        conn.execute("DELETE FROM results")
-        conn.execute("DELETE FROM entries")
+        conn.execute(
+            "DELETE FROM results WHERE entry_id IN (SELECT entry_id FROM entries WHERE meet_id = ?)",
+            (target_id,),
+        )
+        conn.execute("DELETE FROM entries WHERE meet_id = ?", (target_id,))
 
 
 def parse_roster_csv(file_bytes: bytes) -> list[tuple[str, str]]:
