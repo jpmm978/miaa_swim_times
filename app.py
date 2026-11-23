@@ -394,7 +394,7 @@ with tab_scoring:
                     "Status",
                     "JD",
                     "Exh",
-                    "Malf",
+                    "Error",
                 ]
             else:
                 col_spec = [0.45, 1.4, 2.3, 1.1, 1.6, 0.85, 0.75, 0.45, 0.5]
@@ -407,7 +407,7 @@ with tab_scoring:
                     "Status",
                     "JD",
                     "Exh",
-                    "Malf",
+                    "Error",
                 ]
 
             header_cols = st.columns(col_spec)
