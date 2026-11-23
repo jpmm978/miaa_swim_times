@@ -62,7 +62,8 @@ def init_db() -> None:
                 team_id TEXT NOT NULL,
                 athlete_ids TEXT NOT NULL,
                 is_exhibition INTEGER NOT NULL,
-                relay_letter TEXT
+                relay_letter TEXT,
+                heat_number INTEGER NOT NULL DEFAULT 1
             )
             """
         )
@@ -126,6 +127,7 @@ def init_db() -> None:
         _ensure_column(conn, "results", "manual_place", "INTEGER")
         _ensure_column(conn, "results", "override_note", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "entries", "meet_id", "TEXT NOT NULL DEFAULT 'default_meet'")
+        _ensure_column(conn, "entries", "heat_number", "INTEGER NOT NULL DEFAULT 1")
 
         lineup_cols = {
             row["name"] for row in conn.execute("PRAGMA table_info(lineups)").fetchall()
@@ -257,9 +259,9 @@ def restore_full_backup_json(raw_json: str) -> tuple[bool, str]:
             conn.execute(
                 """
                 INSERT INTO entries (
-                    entry_id, meet_id, event_number, team_id, athlete_ids, is_exhibition, relay_letter
+                    entry_id, meet_id, event_number, team_id, athlete_ids, is_exhibition, relay_letter, heat_number
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     e["entry_id"],
@@ -271,6 +273,7 @@ def restore_full_backup_json(raw_json: str) -> tuple[bool, str]:
                     else json.dumps(e["athlete_ids"]),
                     int(bool(e.get("is_exhibition", 0))),
                     e.get("relay_letter"),
+                    int(e.get("heat_number") or 1),
                 ),
             )
 
@@ -606,9 +609,9 @@ def save_entry_and_result(entry: Entry, result: Result, meet_id: Optional[str] =
         conn.execute(
             """
             INSERT OR REPLACE INTO entries (
-                entry_id, meet_id, event_number, team_id, athlete_ids, is_exhibition, relay_letter
+                entry_id, meet_id, event_number, team_id, athlete_ids, is_exhibition, relay_letter, heat_number
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entry.entry_id,
@@ -618,6 +621,7 @@ def save_entry_and_result(entry: Entry, result: Result, meet_id: Optional[str] =
                 json.dumps(entry.athlete_ids),
                 int(entry.is_exhibition),
                 entry.relay_letter,
+                int(getattr(entry, "heat_number", 1)),
             ),
         )
         conn.execute(
@@ -647,7 +651,7 @@ def update_entry_and_result(entry: Entry, result: Result) -> None:
         conn.execute(
             """
             UPDATE entries
-            SET team_id = ?, athlete_ids = ?, is_exhibition = ?, relay_letter = ?
+            SET team_id = ?, athlete_ids = ?, is_exhibition = ?, relay_letter = ?, heat_number = ?
             WHERE entry_id = ?
             """,
             (
@@ -655,6 +659,7 @@ def update_entry_and_result(entry: Entry, result: Result) -> None:
                 json.dumps(entry.athlete_ids),
                 int(entry.is_exhibition),
                 entry.relay_letter,
+                int(getattr(entry, "heat_number", 1)),
                 entry.entry_id,
             ),
         )
@@ -721,17 +726,21 @@ def load_all_data(meet_id: Optional[str] = None) -> tuple[list[Entry], list[Resu
             (target_id,),
         ).fetchall()
 
-    entries = [
-        Entry(
-            entry_id=r["entry_id"],
-            event_number=r["event_number"],
-            team_id=r["team_id"],
-            athlete_ids=json.loads(r["athlete_ids"]),
-            is_exhibition=bool(r["is_exhibition"]),
-            relay_letter=r["relay_letter"],
+    entries: list[Entry] = []
+    for r in entry_rows:
+        e_keys = set(r.keys())
+        heat_val = r["heat_number"] if "heat_number" in e_keys and r["heat_number"] is not None else 1
+        entries.append(
+            Entry(
+                entry_id=r["entry_id"],
+                event_number=r["event_number"],
+                team_id=r["team_id"],
+                athlete_ids=json.loads(r["athlete_ids"]),
+                is_exhibition=bool(r["is_exhibition"]),
+                relay_letter=r["relay_letter"],
+                heat_number=int(heat_val),
+            )
         )
-        for r in entry_rows
-    ]
 
     results: list[Result] = []
     for r in result_rows:
