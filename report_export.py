@@ -57,6 +57,27 @@ def _event_has_lineup_or_result(
     return bool(ev_entry_ids & res_entry_ids)
 
 
+def _format_lineup_participant(event: Optional[Event], data: Optional[dict]) -> tuple[str, str, str]:
+    """Returns (team_str, participant_str, note_str) for a normalized lineup slot."""
+    if not data or not data.get("athlete_ids"):
+        default_note = "EXH" if (data and (data.get("is_exhibition") or int(data.get("heat_number") or 1) > 1)) else ""
+        return ("—", "—", default_note)
+
+    team_str = str(data.get("team_id") or "—")
+    athlete_ids = [str(a) for a in (data.get("athlete_ids") or [])]
+    relay_letter = data.get("relay_letter")
+
+    if event is not None and event.event_type == EventType.RELAY and relay_letter:
+        participant = f"Rly {relay_letter}: {', '.join(athlete_ids)}"
+    else:
+        participant = ", ".join(athlete_ids)
+
+    heat_num = int(data.get("heat_number") or 1)
+    is_exh = bool(data.get("is_exhibition")) or (heat_num > 1)
+    note_str = "EXH" if is_exh else ""
+    return (team_str, participant, note_str)
+
+
 def _render_signatures_section(signatures: Optional[dict[str, dict]]) -> str:
     """Renders saved electronic signatures above signature lines, or the default 2-line block."""
     sigs = signatures or {}
@@ -1057,6 +1078,323 @@ def export_event_pair_timer_sheets_html(
       body {{ padding: 0; }}
       .pair-page {{ max-width: 100%; margin: 0; }}
       .ev-bar, th, tbody tr:nth-child(even) {{
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  {body_content}
+</body>
+</html>
+"""
+
+
+def export_lane_event_pair_sheets_html(
+    team_a: str,
+    team_b: str,
+    events: list[Event],
+    lineups: dict,
+    meet_date: date | None = None,
+    only_populated: bool = False,
+    entries: Optional[list[Entry]] = None,
+    results: Optional[list[Result]] = None,
+) -> str:
+    """Generates a print-ready HTML packet with one page per lane for each event pair.
+
+    Page ordering:
+      - Events 1 & 2: Lane 1, Lane 2, ..., Lane 6
+      - Events 3 & 4: Lane 1, Lane 2, ..., Lane 6
+      - ... through Events 23 & 24: Lane 1, Lane 2, ..., Lane 6
+    """
+    date_display = (meet_date or date.today()).strftime("%B %d, %Y")
+    esc_a = html.escape(team_a)
+    esc_b = html.escape(team_b)
+    norm_lineups = _normalize_lineup_lookup(lineups)
+    events_by_num = {ev.event_number: ev for ev in events}
+
+    max_ev = max([24] + list(events_by_num.keys()))
+    if max_ev % 2 == 1:
+        max_ev += 1
+
+    pages_html: list[str] = []
+
+    for ev_a in range(1, max_ev + 1, 2):
+        ev_b = ev_a + 1
+        pair_ev_nums = [n for n in (ev_a, ev_b) if n in events_by_num or n <= 24]
+        if not pair_ev_nums:
+            continue
+
+        if only_populated and not any(
+            _event_has_lineup_or_result(n, norm_lineups, entries, results)
+            for n in (ev_a, ev_b)
+        ):
+            continue
+
+        for lane in range(1, 7):
+            default_side = f"{esc_a} (Even)" if lane % 2 == 0 else f"{esc_b} (Odd)"
+            event_blocks: list[str] = []
+
+            for ev_num in (ev_a, ev_b):
+                ev = events_by_num.get(ev_num)
+                if ev is not None:
+                    g_label = "Girls" if ev.gender == "F" else "Boys"
+                    ev_heading = f"Event {ev.event_number}: {g_label} {html.escape(ev.name)}"
+                else:
+                    ev_heading = f"Event {ev_num}"
+
+                if ev is not None and ev.event_type == EventType.DIVING:
+                    event_blocks.append(
+                        f"""
+                        <div class="ev-card">
+                          <div class="ev-bar">
+                            <span>{ev_heading}</span>
+                            <span class="lane-tag">Lane {lane} — Diving</span>
+                          </div>
+                          <table>
+                            <thead>
+                              <tr>
+                                <th class="center" style="width: 10%;">Heat</th>
+                                <th style="width: 22%;">Team</th>
+                                <th style="width: 34%;">Diver</th>
+                                <th class="center" style="width: 10%;">Score 1</th>
+                                <th class="center" style="width: 10%;">Score 2</th>
+                                <th class="center" style="width: 14%;">Total / Note</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr class="diving-row">
+                                <td class="center">—</td>
+                                <td colspan="5" class="center"><em>Diving Event — No Swim Lane Timing</em></td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                        """
+                    )
+                    continue
+
+                ev_heats = sorted(
+                    {
+                        heat_num
+                        for (e_num, heat_num, _l), data in norm_lineups.items()
+                        if e_num == ev_num and data.get("athlete_ids")
+                    }
+                )
+                if not ev_heats:
+                    ev_heats = [1]
+
+                rows_html: list[str] = []
+                for heat_num in ev_heats:
+                    data = norm_lineups.get((ev_num, heat_num, lane))
+                    t_raw, p_raw, n_raw = _format_lineup_participant(ev, data)
+                    heat_label = f"H{heat_num}"
+                    heat_role = "Scoring" if heat_num == 1 else "EXH"
+                    note_combined = " / ".join(x for x in (heat_role, n_raw) if x)
+
+                    rows_html.append(
+                        f"<tr>"
+                        f"<td class='center'><strong>{heat_label}</strong></td>"
+                        f"<td>{html.escape(t_raw)}</td>"
+                        f"<td class='swimmer'>{html.escape(p_raw)}</td>"
+                        f"<td class='watch'></td>"
+                        f"<td class='watch'></td>"
+                        f"<td class='watch'></td>"
+                        f"<td class='center note'>{html.escape(note_combined)}</td>"
+                        f"</tr>"
+                    )
+
+                event_blocks.append(
+                    f"""
+                    <div class="ev-card">
+                      <div class="ev-bar">
+                        <span>{ev_heading}</span>
+                        <span class="lane-tag">Lane {lane}</span>
+                      </div>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th class="center" style="width: 8%;">Heat</th>
+                            <th style="width: 18%;">Team</th>
+                            <th style="width: 33%;">Swimmer / Relay</th>
+                            <th class="center" style="width: 10.5%;">Watch 1</th>
+                            <th class="center" style="width: 10.5%;">Watch 2</th>
+                            <th class="center" style="width: 10.5%;">Watch 3</th>
+                            <th class="center" style="width: 9.5%;">Role / Note</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {''.join(rows_html)}
+                        </tbody>
+                      </table>
+                    </div>
+                    """
+                )
+
+            pages_html.append(
+                f"""
+                <section class="lane-pair-page">
+                  <header>
+                    <div>
+                      <h1>LANE {lane} — EVENTS {ev_a} &amp; {ev_b}</h1>
+                      <div class="meta">{esc_a} vs. {esc_b} &nbsp;|&nbsp; {default_side} &nbsp;|&nbsp; Heat 1 Scores · Heat 2+ Exhibition</div>
+                    </div>
+                    <div class="meta right">
+                      <div>{date_display}</div>
+                      <div class="timer-line">Lane {lane} Timer: ______________________</div>
+                    </div>
+                  </header>
+                  <main>
+                    {''.join(event_blocks)}
+                  </main>
+                  <footer>
+                    <span>Events {ev_a} &amp; {ev_b} — Lane {lane}</span>
+                    <span>Official Initials: ________________</span>
+                  </footer>
+                </section>
+                """
+            )
+
+    if pages_html:
+        pages_html[-1] = pages_html[-1].replace(
+            '<section class="lane-pair-page">',
+            '<section class="lane-pair-page last-page">',
+            1,
+        )
+
+    body_content = (
+        "".join(pages_html)
+        if pages_html
+        else "<p>No populated event-pair lane sheets found for the selected filter.</p>"
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Lane Event-Pair Timer Sheets — {esc_a} vs {esc_b}</title>
+  <style>
+    @page {{
+      size: letter portrait;
+      margin: 0.4in;
+    }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #111;
+      margin: 0;
+      padding: 16px;
+      font-size: 11px;
+      line-height: 1.25;
+    }}
+    .lane-pair-page {{
+      max-width: 820px;
+      margin: 0 auto 32px auto;
+      page-break-after: always;
+      break-after: page;
+    }}
+    .lane-pair-page.last-page {{
+      page-break-after: auto;
+      break-after: auto;
+    }}
+    header {{
+      border-bottom: 2px solid #222;
+      padding-bottom: 6px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }}
+    header h1 {{
+      margin: 0;
+      font-size: 17px;
+      letter-spacing: 0.02em;
+    }}
+    .meta {{
+      color: #333;
+      font-size: 10.5px;
+    }}
+    .right {{
+      text-align: right;
+    }}
+    .timer-line {{
+      margin-top: 3px;
+    }}
+    .ev-card {{
+      margin-bottom: 16px;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }}
+    .ev-bar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: 700;
+      font-size: 12px;
+      background: #e2e8f0;
+      padding: 5px 8px;
+      border-left: 4px solid #0f766e;
+      border-top: 1px solid #94a3b8;
+      border-right: 1px solid #94a3b8;
+    }}
+    .lane-tag {{
+      font-size: 10.5px;
+      background: #ffffff;
+      color: #0f172a;
+      border: 1px solid #94a3b8;
+      border-radius: 3px;
+      padding: 1px 7px;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+    }}
+    th, td {{
+      border: 1px solid #999;
+      padding: 5px 6px;
+      text-align: left;
+      vertical-align: middle;
+    }}
+    th {{
+      font-size: 10px;
+      text-transform: uppercase;
+      background: #f8fafc;
+      color: #1e293b;
+    }}
+    tbody tr:nth-child(odd) {{
+      background-color: #ffffff;
+    }}
+    tbody tr:nth-child(even) {{
+      background-color: #f4f6f9;
+    }}
+    td.swimmer {{
+      font-size: 11px;
+    }}
+    td.watch {{
+      height: 22px;
+    }}
+    td.note {{
+      font-size: 9.5px;
+      font-weight: 600;
+    }}
+    tr.diving-row td {{
+      background-color: #e9edf2;
+      color: #475569;
+    }}
+    footer {{
+      margin-top: 12px;
+      padding-top: 6px;
+      border-top: 1px solid #cbd5e1;
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: #334155;
+    }}
+    .center {{ text-align: center; }}
+    @media print {{
+      body {{ padding: 0; }}
+      .lane-pair-page {{ max-width: 100%; margin: 0; }}
+      .ev-bar, .lane-tag, th, tbody tr:nth-child(even), tr.diving-row td {{
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }}
