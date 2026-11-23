@@ -366,11 +366,13 @@ with tab_scoring:
                         st.error("Entry blocked. Check override to record anyway.")
                     else:
                         new_result = Result(
-                            entry_id=entry_id,
-                            diving_score=diving_score,
-                            status=ResultStatus(status_choice),
-                            manual_place=None if jd_choice == "Auto" else int(jd_choice),
-                        )
+    entry_id=entry_id,
+    watch_time_cs=pad_cs,
+    backup_times_cs=backups_cs,
+    status=ResultStatus(row["status"]),
+    official_time_cs=official_cs,
+    manual_place=row["jd"],
+)
                         save_entry_and_result(new_entry, new_result)
                         st.rerun()
     else:
