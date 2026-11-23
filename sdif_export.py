@@ -53,6 +53,11 @@ def _format_sdif_time(result: Result) -> str:
     return format_cs_to_time(result.official_time_cs).rjust(8)
 
 
+def _is_exhibition_entry(entry: Entry) -> bool:
+    """Any Heat 2+ entry or explicitly flagged exhibition entry is exhibition."""
+    return bool(entry.is_exhibition) or (int(getattr(entry, "heat_number", 1) or 1) > 1)
+
+
 def export_meet_sd3(
     meet_name: str,
     events: list[Event],
@@ -114,7 +119,7 @@ def export_meet_sd3(
     # --- D0 (Individual) and E0/F0 (Relay) Records ---
     for team_name in unique_teams:
         team_entries = [e for e in entries if e.team_id == team_name]
-        team_entries.sort(key=lambda e: e.event_number)
+        team_entries.sort(key=lambda e: (e.event_number, int(getattr(e, "heat_number", 1) or 1)))
 
         for entry in team_entries:
             ev = events_by_num.get(entry.event_number)
@@ -122,10 +127,13 @@ def export_meet_sd3(
             if not ev or not res or ev.event_type == EventType.DIVING:
                 continue  # SDIF v3 does not support diving records
 
+            heat_num = int(getattr(entry, "heat_number", 1) or 1)
+            is_exh = _is_exhibition_entry(entry)
             distance, stroke_code = _parse_distance_and_stroke(ev)
             time_field = _format_sdif_time(res)
-            place_str = str(res.place) if res.place is not None else ""
-            pts_str = f"{res.points:.1f}" if res.points > 0 else ""
+            place_str = "" if is_exh else (str(res.place) if res.place is not None else "")
+            pts_str = "" if is_exh else (f"{res.points:.1f}" if res.points > 0 else "")
+            heat_str = str(heat_num)
 
             if ev.event_type == EventType.INDIVIDUAL:
                 d0 = _new_line()
@@ -142,6 +150,9 @@ def export_meet_sd3(
                 _put(d0, 81, 8, date_str)
                 _put(d0, 116, 8, time_field, right=True)
                 _put(d0, 124, 1, "Y")
+                _put(d0, 125, 2, heat_str, right=True)
+                if is_exh:
+                    _put(d0, 131, 1, "X")
                 _put(d0, 132, 3, place_str, right=True)
                 _put(d0, 135, 4, pts_str, right=True)
                 lines.append("".join(d0))
@@ -165,6 +176,9 @@ def export_meet_sd3(
                 _put(e0, 38, 8, date_str)
                 _put(e0, 73, 8, time_field, right=True)
                 _put(e0, 81, 1, "Y")
+                _put(e0, 82, 2, heat_str, right=True)
+                if is_exh:
+                    _put(e0, 88, 1, "X")
                 _put(e0, 89, 3, place_str, right=True)
                 _put(e0, 92, 4, pts_str, right=True)
                 lines.append("".join(e0))
