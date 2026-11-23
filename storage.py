@@ -64,6 +64,19 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lineups (
+                event_number INTEGER NOT NULL,
+                lane INTEGER NOT NULL,
+                team_id TEXT NOT NULL,
+                athlete_ids TEXT NOT NULL,
+                relay_letter TEXT,
+                is_exhibition INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (event_number, lane)
+            )
+            """
+        )
 
         # Safe migration for existing swim_meet.db files
         existing_cols = {
@@ -157,6 +170,13 @@ def update_result_override(
             """,
             (manual_place, override_note.strip(), entry_id),
         )
+
+
+def delete_entry_and_result(entry_id: str) -> None:
+    """Deletes a single recorded entry and its associated result."""
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM results WHERE entry_id = ?", (entry_id,))
+        conn.execute("DELETE FROM entries WHERE entry_id = ?", (entry_id,))
 
 
 def load_all_data() -> tuple[list[Entry], list[Result]]:
@@ -264,6 +284,55 @@ def load_rosters() -> dict[tuple[str, str], list[str]]:
         key = (r["team_id"], r["gender"])
         rosters.setdefault(key, []).append(r["name"])
     return rosters
+
+
+def save_lineups(rows: list[dict]) -> None:
+    """Replaces saved lineup assignments for the given event/lane rows."""
+    with _get_conn() as conn:
+        for row in rows:
+            if row["athlete_ids"]:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO lineups
+                        (event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        row["event_number"],
+                        row["lane"],
+                        row["team_id"],
+                        json.dumps(row["athlete_ids"]),
+                        row.get("relay_letter"),
+                        int(row.get("is_exhibition", False)),
+                    ),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM lineups WHERE event_number = ? AND lane = ?",
+                    (row["event_number"], row["lane"]),
+                )
+
+
+def load_lineups() -> dict[tuple[int, int], dict]:
+    """Returns a lookup dict mapping (event_number, lane) -> lineup dict."""
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT * FROM lineups").fetchall()
+
+    return {
+        (r["event_number"], r["lane"]): {
+            "team_id": r["team_id"],
+            "athlete_ids": json.loads(r["athlete_ids"]),
+            "relay_letter": r["relay_letter"],
+            "is_exhibition": bool(r["is_exhibition"]),
+        }
+        for r in rows
+    }
+
+
+def clear_lineups() -> None:
+    """Deletes all saved lineup assignments while leaving rosters and meet results intact."""
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM lineups")
 
 
 def export_meet_csv(
