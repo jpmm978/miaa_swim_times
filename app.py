@@ -103,6 +103,56 @@ def compute_division_totals(team_a: str, team_b: str) -> dict[str, dict[str, flo
     return totals
 
 
+def build_scoring_audit_rows(team_a: str, team_b: str, gender_filter: str) -> list[dict]:
+    """Builds event-by-event points and running cumulative totals for officials verification."""
+    running_a = 0.0
+    running_b = 0.0
+    audit_rows: list[dict] = []
+
+    for ev in STANDARD_EVENTS:
+        if gender_filter != "All" and ev.gender != gender_filter:
+            continue
+
+        ev_scores = score_event(
+            event=ev,
+            entries=entries,
+            results=results,
+            meet_format=MeetFormat.DUAL,
+        )
+        pts_a = float(ev_scores.get(team_a, 0.0))
+        pts_b = float(ev_scores.get(team_b, 0.0))
+        running_a += pts_a
+        running_b += pts_b
+
+        ev_entries = {e.entry_id: e for e in entries if e.event_number == ev.event_number}
+        ev_results = [r for r in results if r.entry_id in ev_entries]
+        place_counts = Counter(r.place for r in ev_results if r.place is not None)
+        has_tie = any(cnt > 1 for cnt in place_counts.values())
+        has_jd = any(r.manual_place is not None for r in ev_results)
+
+        notes: list[str] = []
+        if has_tie:
+            notes.append("Tie (Rule 7-1)")
+        if has_jd:
+            notes.append("JD Override")
+
+        audit_rows.append(
+            {
+                "Event #": ev.event_number,
+                "Division": "Girls" if ev.gender == "F" else "Boys",
+                "Event": ev.name,
+                f"{team_a} Pts": f"{pts_a:g}",
+                f"{team_b} Pts": f"{pts_b:g}",
+                f"{team_a} Running": f"{running_a:g}",
+                f"{team_b} Running": f"{running_b:g}",
+                "Scored Entries": len(ev_results),
+                "Notes": ", ".join(notes) if notes else "—",
+            }
+        )
+
+    return audit_rows
+
+
 def render_leader_banner(
     label: str, score_a: float, score_b: float, name_a: str, name_b: str
 ) -> None:
@@ -419,7 +469,9 @@ if is_meet_closed:
         "or click **Reopen Meet** in the sidebar to make edits."
     )
 
-tab_scoring, tab_lineup = st.tabs(["Event Scoring", "Batch Lineup & Seeding"])
+tab_scoring, tab_lineup, tab_audit = st.tabs(
+    ["Event Scoring", "Batch Lineup & Seeding", "Official Scoring Check"]
+)
 
 
 # ==============================================================================
@@ -855,7 +907,7 @@ with tab_scoring:
         }
         results_by_id = {res.entry_id: res for res in event_results}
 
-        # --- Edit an Existing Result (Replaces Delete) ---
+        # --- Edit an Existing Result ---
         with st.expander("Edit Existing Result"):
             edit_entry_id = st.selectbox(
                 "Select Swimmer / Relay to Edit",
@@ -1272,3 +1324,93 @@ with tab_lineup:
             if key.startswith("lu_ev"):
                 del st.session_state[key]
         st.rerun()
+
+
+# ==============================================================================
+# TAB 3: OFFICIAL SCORING CHECK (AUDIT VIEW)
+# ==============================================================================
+with tab_audit:
+    st.subheader("Official Scoring Audit & Running Totals")
+    st.caption(
+        "Central verification view for meet officials and coaches to confirm event-by-event "
+        "points, running cumulative totals, ties, and Judge's Decision (JD) overrides."
+    )
+
+    a_filter_col, a_expand_col = st.columns([2.5, 1.5], vertical_alignment="bottom")
+    audit_div = a_filter_col.radio(
+        "Division View", ["All", "Girls", "Boys"], horizontal=True, key="audit_div_filter"
+    )
+    expand_all_events = a_expand_col.checkbox("Expand all event point breakdowns", value=False)
+
+    gender_code = "F" if audit_div == "Girls" else ("M" if audit_div == "Boys" else "All")
+
+    s_cols = st.columns(4)
+    s_cols[0].metric(f"Girls {team_a}", f"{g_score_a:g}")
+    s_cols[1].metric(f"Girls {team_b}", f"{g_score_b:g}")
+    s_cols[2].metric(f"Boys {team_a}", f"{b_score_a:g}")
+    s_cols[3].metric(f"Boys {team_b}", f"{b_score_b:g}")
+
+    audit_rows = build_scoring_audit_rows(team_a, team_b, gender_code)
+    st.dataframe(audit_rows, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Event-by-Event Point Breakdown")
+
+    entries_by_id_all = {e.entry_id: e for e in entries}
+    for ev in STANDARD_EVENTS:
+        if gender_code != "All" and ev.gender != gender_code:
+            continue
+
+        ev_scores = score_event(
+            event=ev,
+            entries=entries,
+            results=results,
+            meet_format=MeetFormat.DUAL,
+        )
+        ev_pts_a = float(ev_scores.get(team_a, 0.0))
+        ev_pts_b = float(ev_scores.get(team_b, 0.0))
+        ev_res_list = [
+            r
+            for r in results
+            if entries_by_id_all.get(r.entry_id)
+            and entries_by_id_all[r.entry_id].event_number == ev.event_number
+        ]
+        ev_res_list.sort(key=lambda r: (r.place is None, r.place or 999))
+        g_lbl = "Girls" if ev.gender == "F" else "Boys"
+
+        with st.expander(
+            f"Event {ev.event_number}: {g_lbl} {ev.name} — {team_a}: {ev_pts_a:g} | {team_b}: {ev_pts_b:g}",
+            expanded=expand_all_events,
+        ):
+            if not ev_res_list:
+                st.caption("No results recorded yet.")
+            else:
+                detail_rows = []
+                for r in ev_res_list:
+                    ent = entries_by_id_all[r.entry_id]
+                    perf = (
+                        f"{r.diving_score:.2f}"
+                        if ev.event_type == EventType.DIVING and r.diving_score is not None
+                        else (
+                            format_cs_to_time(r.official_time_cs)
+                            if r.official_time_cs is not None
+                            else "—"
+                        )
+                    )
+                    detail_rows.append(
+                        {
+                            "Place": (
+                                f"{r.place} (JD)"
+                                if r.place is not None and r.manual_place is not None
+                                else (str(r.place) if r.place is not None else "—")
+                            ),
+                            "Team": ent.team_id,
+                            "Participant": ", ".join(ent.athlete_ids),
+                            "Time / Score": perf,
+                            "Status": r.status.value,
+                            "Exh": "Yes" if ent.is_exhibition else "",
+                            "Points": f"{r.points:g}",
+                            "Note": r.override_note or "—",
+                        }
+                    )
+                st.table(detail_rows)
