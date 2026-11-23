@@ -128,16 +128,20 @@ with st.sidebar:
         file_a = st.file_uploader(f"{team_a} Roster", type=["csv"], key="roster_upload_a")
         if file_a is not None and st.button(f"Load {team_a} Roster"):
             parsed = parse_roster_csv(file_a.getvalue())
-            save_roster(team_a, parsed)
-            st.success(f"Loaded {len(parsed)} swimmers for {team_a}.")
-            st.rerun()
+            if not parsed:
+                st.error("No valid swimmers found. Check that each row has a Name and Gender (F/M).")
+            else:
+                save_roster(team_a, parsed)
+                st.rerun()
 
         file_b = st.file_uploader(f"{team_b} Roster", type=["csv"], key="roster_upload_b")
         if file_b is not None and st.button(f"Load {team_b} Roster"):
             parsed = parse_roster_csv(file_b.getvalue())
-            save_roster(team_b, parsed)
-            st.success(f"Loaded {len(parsed)} swimmers for {team_b}.")
-            st.rerun()
+            if not parsed:
+                st.error("No valid swimmers found. Check that each row has a Name and Gender (F/M).")
+            else:
+                save_roster(team_b, parsed)
+                st.rerun()
 
         count_a = len(rosters.get((team_a, "F"), [])) + len(rosters.get((team_a, "M"), []))
         count_b = len(rosters.get((team_b, "F"), [])) + len(rosters.get((team_b, "M"), []))
@@ -297,7 +301,6 @@ with tab_scoring:
     if "scoring_event_idx" not in st.session_state:
         st.session_state.scoring_event_idx = 0
 
-    # Reset if switching the Division Filter makes the saved index out of range
     if st.session_state.scoring_event_idx >= len(filtered_events):
         st.session_state.scoring_event_idx = 0
 
@@ -366,13 +369,11 @@ with tab_scoring:
                         st.error("Entry blocked. Check override to record anyway.")
                     else:
                         new_result = Result(
-    entry_id=entry_id,
-    watch_time_cs=pad_cs,
-    backup_times_cs=backups_cs,
-    status=ResultStatus(row["status"]),
-    official_time_cs=official_cs,
-    manual_place=row["jd"],
-)
+                            entry_id=entry_id,
+                            diving_score=diving_score,
+                            status=ResultStatus(status_choice),
+                            manual_place=None if jd_choice == "Auto" else int(jd_choice),
+                        )
                         save_entry_and_result(new_entry, new_result)
                         st.rerun()
     else:
@@ -396,7 +397,7 @@ with tab_scoring:
                     "Status",
                     "JD",
                     "Exh",
-                    "Error",
+                    "Malf",
                 ]
             else:
                 col_spec = [0.45, 1.4, 2.3, 1.1, 1.6, 0.85, 0.75, 0.45, 0.5]
@@ -409,7 +410,7 @@ with tab_scoring:
                     "Status",
                     "JD",
                     "Exh",
-                    "Error",
+                    "Malf",
                 ]
 
             header_cols = st.columns(col_spec)
@@ -522,7 +523,7 @@ with tab_scoring:
                     l_watch = cols[3].text_input(
                         "Watch",
                         placeholder="24.51",
-                        key=f"{key_prefix}_Watch",
+                        key=f"{key_prefix}_watch",
                         label_visibility="collapsed",
                     )
                     l_backups = cols[4].text_input(
@@ -698,7 +699,6 @@ with tab_scoring:
                 "place(s) are combined and divided equally among the tied competitors."
             )
 
-        # Shared dropdown labels for JD Override and Single-Result Delete
         result_options = {
             res.entry_id: (
                 f"{event_entries[res.entry_id].team_id} — "
@@ -710,7 +710,6 @@ with tab_scoring:
         }
         results_by_id = {res.entry_id: res for res in event_results}
 
-        # --- Inline JD Override Editor ---
         with st.expander("Edit Official Judge's Decision (JD) Override"):
             selected_entry_id = st.selectbox(
                 "Select Swimmer / Relay",
@@ -746,7 +745,6 @@ with tab_scoring:
                     )
                     st.rerun()
 
-        # --- Delete a Single Result ---
         with st.expander("Delete a Single Result"):
             delete_entry_id = st.selectbox(
                 "Select Swimmer / Relay to Remove",
@@ -929,7 +927,6 @@ with tab_lineup:
         submitted_lineups = st.form_submit_button("Save All Lineups", type="primary")
 
         if submitted_lineups:
-            # Merge edited rows with any other saved lineups not currently visible
             merged_lineups = dict(lineups)
             for row in pending_lineups:
                 key = (row["event_number"], row["lane"])
@@ -938,7 +935,6 @@ with tab_lineup:
                 else:
                     merged_lineups.pop(key, None)
 
-            # Build temporary Entry objects to validate against NFHS Rule 3-2-1
             projected_lineup_entries = [
                 Entry(
                     entry_id=f"lu_{ev_num}_{lane}",
