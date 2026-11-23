@@ -54,6 +54,34 @@ from timing import calculate_official_time, format_cs_to_time, parse_time_to_cs
 from validation import validate_athlete_entries
 
 st.set_page_config(page_title="MIAA Dual Meet Scorer", layout="wide")
+
+st.markdown(
+    """
+    <style>
+      div[data-testid="stTable"] table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      div[data-testid="stTable"] thead tr th {
+        background-color: #e2e8f0;
+        color: #0f172a;
+        font-weight: 700;
+        border-bottom: 2px solid #94a3b8;
+      }
+      div[data-testid="stTable"] tbody tr:nth-child(odd) {
+        background-color: #ffffff;
+      }
+      div[data-testid="stTable"] tbody tr:nth-child(even) {
+        background-color: #f4f6f9;
+      }
+      div[data-testid="stTable"] tbody tr:hover {
+        background-color: #e6f4f1;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 init_db()
 
 BASE_EVENTS = [
@@ -1781,7 +1809,6 @@ with tab_lineup:
                             }
                         )
 
-                # Clear any higher-numbered heats if user reduced heat count
                 for extra_heat in range(num_heats + 1, max(HEAT_OPTIONS) + 1):
                     for lane in range(1, 7):
                         pending_lineups.append(
