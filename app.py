@@ -1,4 +1,5 @@
 from collections import Counter
+import inspect
 import time
 import uuid
 import streamlit as st
@@ -19,6 +20,7 @@ from storage import (
     create_new_meet,
     delete_meet,
     delete_meet_signature,
+    export_full_backup_json,
     export_meet_csv,
     get_active_meet_id,
     init_db,
@@ -30,6 +32,7 @@ from storage import (
     load_team_names,
     parse_roster_csv,
     rename_meet,
+    restore_full_backup_json,
     save_entry_and_result,
     save_lineups,
     save_meet_signature,
@@ -100,6 +103,31 @@ entries, results = load_all_data(active_meet_id)
 rosters = load_rosters()
 lineups = load_lineups(active_meet_id)
 saved_signatures = load_meet_signatures(active_meet_id)
+
+
+def _call_export_meet_html(
+    team_a: str,
+    team_b: str,
+    div_totals: dict,
+    gender: str,
+    signatures: dict,
+) -> str:
+    """Calls export_meet_html and passes saved signatures when supported."""
+    sig_params = inspect.signature(export_meet_html).parameters
+    kwargs = {
+        "team_a": team_a,
+        "team_b": team_b,
+        "div_totals": div_totals,
+        "events": STANDARD_EVENTS,
+        "entries": entries,
+        "results": results,
+        "gender": gender,
+    }
+    if "signatures" in sig_params:
+        kwargs["signatures"] = signatures
+    elif "saved_signatures" in sig_params:
+        kwargs["saved_signatures"] = signatures
+    return export_meet_html(**kwargs)
 
 
 def render_signature_pad(role_key: str, role_label: str, existing_data_url: str = "") -> None:
@@ -722,15 +750,7 @@ with st.sidebar:
     h1, h2 = st.columns(2)
     h1.download_button(
         label="Girls HTML",
-        data=export_meet_html(
-            team_a=team_a,
-            team_b=team_b,
-            div_totals=div_totals,
-            events=STANDARD_EVENTS,
-            entries=entries,
-            results=results,
-            gender="F",
-        ),
+        data=_call_export_meet_html(team_a, team_b, div_totals, "F", saved_signatures),
         file_name=f"girls_report_{safe_matchup}.html",
         mime="text/html",
         disabled=len(g_results) == 0,
@@ -738,15 +758,7 @@ with st.sidebar:
     )
     h2.download_button(
         label="Boys HTML",
-        data=export_meet_html(
-            team_a=team_a,
-            team_b=team_b,
-            div_totals=div_totals,
-            events=STANDARD_EVENTS,
-            entries=entries,
-            results=results,
-            gender="M",
-        ),
+        data=_call_export_meet_html(team_a, team_b, div_totals, "M", saved_signatures),
         file_name=f"boys_report_{safe_matchup}.html",
         mime="text/html",
         disabled=len(b_results) == 0,
@@ -800,6 +812,28 @@ with st.sidebar:
         disabled=len(b_results) == 0,
         use_container_width=True,
     )
+
+    st.divider()
+    st.subheader("Full Database Backup / Restore")
+    st.download_button(
+        label="Download Meet Backup (.json)",
+        data=export_full_backup_json(),
+        file_name=f"swim_meet_backup_{safe_matchup}.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+    with st.expander("Restore Backup (.json)"):
+        backup_file = st.file_uploader(
+            "Select Backup JSON", type=["json"], key="backup_restore_uploader"
+        )
+        if backup_file is not None and st.button("Restore Database from Backup", type="secondary"):
+            ok, msg = restore_full_backup_json(backup_file.getvalue().decode("utf-8"))
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
     if st.button("Reset Current Meet", type="secondary", disabled=is_meet_closed):
         clear_all(active_meet_id)
         st.rerun()
@@ -877,6 +911,29 @@ with tab_scoring:
 
     selected_event = filtered_events[selected_idx]
     gender_label = "Girls" if selected_event.gender == "F" else "Boys"
+
+    # Quick Swimmer Event Count / Limit Lookup before recording a heat
+    with st.expander("Swimmer Event Count Lookup (NFHS 3-2-1)"):
+        usage_rows = get_athlete_usage()
+        if not usage_rows:
+            st.caption("No athletes recorded in this meet yet.")
+        else:
+            swimmer_filter_q = (
+                st.text_input(
+                    "Filter athlete",
+                    placeholder="Type swimmer name...",
+                    key=f"swimmer_lookup_q_{selected_event.event_number}",
+                )
+                .strip()
+                .lower()
+            )
+            shown_usage = [
+                u for u in usage_rows if not swimmer_filter_q or swimmer_filter_q in u["Athlete"].lower()
+            ]
+            if shown_usage:
+                st.table(shown_usage)
+            else:
+                st.caption("No matching athletes found.")
 
     # --- Entry Section: Diving (Single Form) vs. Swimming (6-Lane Heat Grid) ---
     if selected_event.event_type == EventType.DIVING:
