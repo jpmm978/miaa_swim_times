@@ -231,7 +231,7 @@ def export_meet_html(
 <body>
   <header>
     <div>
-      <h1>MIAA {div_label} Dual Meet Official Results</h1>
+      <h1>High School {div_label} Dual Meet Official Results</h1>
       <div class="meta">{esc_a} vs. {esc_b} &nbsp;|&nbsp; {date_display}</div>
     </div>
     <div class="score-banner">
