@@ -1,6 +1,7 @@
 from collections import Counter
 import uuid
 import streamlit as st
+import streamlit.components.v1 as components
 
 from models import Entry, Event, EventType, Result, ResultStatus
 from report_export import (
@@ -16,18 +17,21 @@ from storage import (
     clear_lineups,
     create_new_meet,
     delete_meet,
+    delete_meet_signature,
     export_meet_csv,
     get_active_meet_id,
     init_db,
     list_meets,
     load_all_data,
     load_lineups,
+    load_meet_signatures,
     load_rosters,
     load_team_names,
     parse_roster_csv,
     rename_meet,
     save_entry_and_result,
     save_lineups,
+    save_meet_signature,
     save_roster,
     save_team_names,
     set_active_meet,
@@ -57,6 +61,13 @@ BASE_EVENTS = [
 
 JD_OPTIONS = ["Auto", 1, 2, 3, 4, 5, 6]
 
+SIGNATURE_ROLES = [
+    ("referee", "Meet Referee"),
+    ("starter", "Starter / Official"),
+    ("home_coach", "Home Coach"),
+    ("visitor_coach", "Visitor Coach"),
+]
+
 
 def build_miaa_events() -> list[Event]:
     """Generates the 24-event MIAA order with Girls' events preceding Boys' events."""
@@ -83,6 +94,119 @@ team_a_saved, team_b_saved = load_team_names(active_meet_id)
 entries, results = load_all_data(active_meet_id)
 rosters = load_rosters()
 lineups = load_lineups(active_meet_id)
+saved_signatures = load_meet_signatures(active_meet_id)
+
+
+def render_signature_pad(role_key: str, role_label: str, existing_data_url: str = "") -> None:
+    """Renders a touch/stylus/mouse HTML5 signature pad that generates a PNG data URL."""
+    pad_html = f"""
+    <div style="font-family: sans-serif; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; background: #ffffff;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <span style="font-size: 13px; font-weight: 600; color: #1e293b;">Draw Signature ({role_label})</span>
+        <button type="button" id="clear_{role_key}" style="padding: 3px 10px; font-size: 12px; cursor: pointer; border: 1px solid #94a3b8; border-radius: 4px; background: #f8fafc;">Clear</button>
+      </div>
+      <canvas id="canvas_{role_key}" width="520" height="140" style="width: 100%; height: 140px; border: 1px dashed #64748b; border-radius: 6px; touch-action: none; background: #fcfcfd; cursor: crosshair;"></canvas>
+      <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
+        <button type="button" id="copy_{role_key}" style="padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; border-radius: 4px; background: #0f766e; color: #ffffff;">Prepare Signature PNG</button>
+        <span id="status_{role_key}" style="font-size: 12px; color: #475569;">Sign with stylus/pen, touch, or mouse, then click Prepare Signature PNG.</span>
+      </div>
+      <textarea id="out_{role_key}" rows="2" placeholder="Click 'Prepare Signature PNG' above or paste a PNG data URL..." style="width: 100%; margin-top: 6px; font-size: 11px; font-family: monospace; border: 1px solid #cbd5e1; border-radius: 4px; padding: 4px;">{existing_data_url}</textarea>
+    </div>
+    <script>
+      (function() {{
+        const canvas = document.getElementById("canvas_{role_key}");
+        const ctx = canvas.getContext("2d");
+        const clearBtn = document.getElementById("clear_{role_key}");
+        const copyBtn = document.getElementById("copy_{role_key}");
+        const statusEl = document.getElementById("status_{role_key}");
+        const outEl = document.getElementById("out_{role_key}");
+
+        function setupCanvas() {{
+          const rect = canvas.getBoundingClientRect();
+          const ratio = window.devicePixelRatio || 1;
+          canvas.width = Math.max(300, Math.floor(rect.width * ratio));
+          canvas.height = Math.max(110, Math.floor(rect.height * ratio));
+          ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, rect.width, rect.height);
+          ctx.strokeStyle = "#0f172a";
+          ctx.lineWidth = 2.4;
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+        }}
+
+        setupCanvas();
+        let drawing = false;
+        let hasStrokes = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        function getPos(e) {{
+          const rect = canvas.getBoundingClientRect();
+          const clientX = e.touches && e.touches.length ? e.touches[0].clientX : e.clientX;
+          const clientY = e.touches && e.touches.length ? e.touches[0].clientY : e.clientY;
+          return {{
+            x: clientX - rect.left,
+            y: clientY - rect.top
+          }};
+        }}
+
+        function startDraw(e) {{
+          e.preventDefault();
+          drawing = true;
+          hasStrokes = true;
+          const pos = getPos(e);
+          lastX = pos.x;
+          lastY = pos.y;
+          ctx.beginPath();
+          ctx.moveTo(lastX, lastY);
+        }}
+
+        function moveDraw(e) {{
+          if (!drawing) return;
+          e.preventDefault();
+          const pos = getPos(e);
+          ctx.lineTo(pos.x, pos.y);
+          ctx.stroke();
+          lastX = pos.x;
+          lastY = pos.y;
+        }}
+
+        function endDraw(e) {{
+          if (!drawing) return;
+          e.preventDefault();
+          drawing = false;
+          ctx.closePath();
+        }}
+
+        canvas.addEventListener("pointerdown", startDraw);
+        canvas.addEventListener("pointermove", moveDraw);
+        window.addEventListener("pointerup", endDraw);
+
+        clearBtn.addEventListener("click", function() {{
+          setupCanvas();
+          hasStrokes = false;
+          outEl.value = "";
+          statusEl.textContent = "Cleared pad.";
+        }});
+
+        copyBtn.addEventListener("click", function() {{
+          if (!hasStrokes && !outEl.value.trim()) {{
+            statusEl.textContent = "Please draw a signature first.";
+            return;
+          }}
+          const dataUrl = canvas.toDataURL("image/png");
+          outEl.value = dataUrl;
+          outEl.select();
+          if (navigator.clipboard && navigator.clipboard.writeText) {{
+            navigator.clipboard.writeText(dataUrl).catch(function() {{}});
+          }}
+          statusEl.textContent = "PNG ready below (and copied if clipboard permitted). Paste into the Save Signature box and click Save Signature.";
+        }});
+      }})();
+    </script>
+    """
+    components.html(pad_html, height=255)
 
 
 def compute_division_totals(team_a: str, team_b: str) -> dict[str, dict[str, float]]:
@@ -469,8 +593,13 @@ if is_meet_closed:
         "or click **Reopen Meet** in the sidebar to make edits."
     )
 
-tab_scoring, tab_lineup, tab_audit = st.tabs(
-    ["Event Scoring", "Batch Lineup & Seeding", "Official Scoring Check"]
+tab_scoring, tab_lineup, tab_audit, tab_signoff = st.tabs(
+    [
+        "Event Scoring",
+        "Batch Lineup & Seeding",
+        "Official Scoring Check",
+        "Official Sign-Off",
+    ]
 )
 
 
@@ -1414,3 +1543,83 @@ with tab_audit:
                         }
                     )
                 st.table(detail_rows)
+
+
+# ==============================================================================
+# TAB 4: OFFICIAL SIGN-OFF (ELECTRONIC SIGNATURE CAPTURE)
+# ==============================================================================
+with tab_signoff:
+    st.subheader("Electronic Official & Coach Sign-Off")
+    st.caption(
+        "Draw a signature using a stylus/pen, touch screen, or mouse, click **Prepare Signature PNG**, "
+        "ensure the PNG data URL is in the form field below, enter the signer's name, and click **Save Signature**."
+    )
+
+    role_keys = [r[0] for r in SIGNATURE_ROLES]
+    role_names = {r[0]: r[1] for r in SIGNATURE_ROLES}
+
+    picked_role = st.selectbox(
+        "Signer Role",
+        options=role_keys,
+        format_func=lambda rk: role_names[rk],
+        key="signoff_role_select",
+    )
+    existing_sig = saved_signatures.get(picked_role, {})
+
+    render_signature_pad(
+        role_key=picked_role,
+        role_label=role_names[picked_role],
+        existing_data_url=existing_sig.get("signature_data_url", ""),
+    )
+
+    with st.form(f"save_sig_form_{picked_role}"):
+        signer_name_input = st.text_input(
+            "Printed Name",
+            value=existing_sig.get("signer_name", ""),
+            placeholder=f"e.g., {role_names[picked_role]} Name",
+        )
+        sig_data_url_input = st.text_area(
+            "Signature PNG Data URL (paste or confirm after clicking 'Prepare Signature PNG')",
+            value=existing_sig.get("signature_data_url", ""),
+            height=75,
+        )
+        s_col1, s_col2 = st.columns([1, 1])
+        save_sig_clicked = s_col1.form_submit_button(
+            "Save Signature", type="primary", disabled=is_meet_closed
+        )
+        clear_sig_clicked = s_col2.form_submit_button(
+            "Remove Saved Signature", type="secondary", disabled=is_meet_closed
+        )
+
+        if save_sig_clicked:
+            if not sig_data_url_input.strip().startswith("data:image/"):
+                st.error(
+                    "Please draw a signature and click 'Prepare Signature PNG' (or paste a valid image data URL) before saving."
+                )
+            else:
+                save_meet_signature(
+                    meet_id=active_meet_id,
+                    role_key=picked_role,
+                    signer_name=signer_name_input,
+                    signature_data_url=sig_data_url_input,
+                )
+                st.success(f"Saved signature for {role_names[picked_role]}.")
+                st.rerun()
+
+        if clear_sig_clicked:
+            delete_meet_signature(active_meet_id, picked_role)
+            st.rerun()
+
+    st.divider()
+    st.subheader("Recorded Meet Sign-Offs")
+    sig_grid = st.columns(2)
+    for idx, (rk, r_label) in enumerate(SIGNATURE_ROLES):
+        with sig_grid[idx % 2]:
+            rec = saved_signatures.get(rk)
+            st.markdown(f"**{r_label}**")
+            if rec and rec.get("signature_data_url"):
+                st.image(rec["signature_data_url"], width=280)
+                who = rec.get("signer_name") or "Name not entered"
+                st.caption(f"Signed by: **{who}** · {rec.get('signed_at', '')}")
+            else:
+                st.caption("No signature recorded yet.")
