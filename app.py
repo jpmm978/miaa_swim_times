@@ -1,4 +1,5 @@
 from collections import Counter
+import time
 import uuid
 import streamlit as st
 import streamlit.components.v1 as components
@@ -83,6 +84,10 @@ def build_miaa_events() -> list[Event]:
 
 STANDARD_EVENTS = build_miaa_events()
 EVENTS_BY_NUM = {e.event_number: e for e in STANDARD_EVENTS}
+
+# Detect read-only Parent / Spectator mode via ?view=parents
+raw_view_param = str(st.query_params.get("view", "")).strip().lower()
+is_parent_view = raw_view_param in ("parents", "parent", "spectator", "readonly")
 
 # Load active meet and persisted state from SQLite on every run
 active_meet_id = get_active_meet_id()
@@ -313,7 +318,223 @@ def get_athlete_usage() -> list[dict[str, str]]:
     return summary
 
 
-# --- Sidebar: Meet Manager, Team Setup, Rosters, Division Scoreboards, Usage & Exports ---
+# Score all events once so division totals and result places/points are up to date
+div_totals = compute_division_totals(team_a_saved, team_b_saved)
+g_score_a = div_totals["F"].get(team_a_saved, 0.0)
+g_score_b = div_totals["F"].get(team_b_saved, 0.0)
+b_score_a = div_totals["M"].get(team_a_saved, 0.0)
+b_score_b = div_totals["M"].get(team_b_saved, 0.0)
+meet_header_title = active_meet_meta["title"] if active_meet_meta else f"{team_a_saved} vs {team_b_saved}"
+
+
+# ==============================================================================
+# READ-ONLY PARENT / SPECTATOR VIEW (?view=parents)
+# ==============================================================================
+if is_parent_view:
+    st.title(f"Live Meet Results & Times — {meet_header_title}")
+    st.caption(
+        "Spectator View (Read-Only): Live team scores, event results, and swimmer times."
+    )
+
+    p_top1, p_top2, p_top3 = st.columns([2.2, 2.0, 1.3], vertical_alignment="bottom")
+    p_div = p_top1.radio(
+        "Division", ["All", "Girls", "Boys"], horizontal=True, key="parent_div_filter"
+    )
+    p_search = p_top2.text_input(
+        "Search Swimmer or Team",
+        placeholder="Type a swimmer's name or team...",
+        key="parent_search_input",
+    ).strip().lower()
+    p_auto_refresh = p_top3.checkbox("Auto-refresh (15s)", value=False, key="parent_autorefresh")
+
+    s_cols = st.columns(4)
+    s_cols[0].metric(
+        f"Girls {team_a_saved}",
+        f"{g_score_a:g}",
+        delta="Leading" if g_score_a > g_score_b else None,
+    )
+    s_cols[1].metric(
+        f"Girls {team_b_saved}",
+        f"{g_score_b:g}",
+        delta="Leading" if g_score_b > g_score_a else None,
+    )
+    s_cols[2].metric(
+        f"Boys {team_a_saved}",
+        f"{b_score_a:g}",
+        delta="Leading" if b_score_a > b_score_b else None,
+    )
+    s_cols[3].metric(
+        f"Boys {team_b_saved}",
+        f"{b_score_b:g}",
+        delta="Leading" if b_score_b > b_score_a else None,
+    )
+
+    results_by_entry_p = {r.entry_id: r for r in results}
+
+    if p_search:
+        st.divider()
+        st.subheader(f"Matching Results for '{p_search}'")
+        matched_rows: list[dict] = []
+        for ev in STANDARD_EVENTS:
+            if p_div == "Girls" and ev.gender != "F":
+                continue
+            if p_div == "Boys" and ev.gender != "M":
+                continue
+
+            ev_ents = [e for e in entries if e.event_number == ev.event_number]
+            ev_ress = [
+                results_by_entry_p[e.entry_id]
+                for e in ev_ents
+                if e.entry_id in results_by_entry_p
+            ]
+            place_counts = Counter(r.place for r in ev_ress if r.place is not None)
+            tied_places = {p for p, cnt in place_counts.items() if cnt > 1}
+
+            for ent in ev_ents:
+                res = results_by_entry_p.get(ent.entry_id)
+                if not res:
+                    continue
+                participants_str = (
+                    f"Relay {ent.relay_letter} ({', '.join(ent.athlete_ids)})"
+                    if ev.event_type == EventType.RELAY and ent.relay_letter
+                    else ", ".join(ent.athlete_ids)
+                )
+                haystack = f"{ent.team_id} {participants_str}".lower()
+                if p_search not in haystack:
+                    continue
+
+                if ev.event_type == EventType.DIVING and res.diving_score is not None:
+                    perf = f"{res.diving_score:.2f}"
+                elif res.official_time_cs is not None:
+                    perf = format_cs_to_time(res.official_time_cs)
+                else:
+                    perf = "—"
+
+                star = "*" if res.place in tied_places else ""
+                place_txt = (
+                    f"{res.place}{star} (JD)"
+                    if res.place is not None and res.manual_place is not None
+                    else (f"{res.place}{star}" if res.place is not None else "—")
+                )
+
+                matched_rows.append(
+                    {
+                        "Event #": ev.event_number,
+                        "Division": "Girls" if ev.gender == "F" else "Boys",
+                        "Event": ev.name,
+                        "Place": place_txt,
+                        "Team": ent.team_id,
+                        "Swimmer / Relay": participants_str,
+                        "Time / Score": perf,
+                        "Status": "" if res.status == ResultStatus.OK else res.status.value,
+                        "Exh": "Exh" if ent.is_exhibition else "",
+                        "Points": f"{res.points:g}",
+                    }
+                )
+
+        if matched_rows:
+            st.table(matched_rows)
+        else:
+            st.info("No recorded results matched your search in this division.")
+
+    st.divider()
+    st.subheader("Event-by-Event Results")
+
+    any_event_shown = False
+    for ev in STANDARD_EVENTS:
+        if p_div == "Girls" and ev.gender != "F":
+            continue
+        if p_div == "Boys" and ev.gender != "M":
+            continue
+
+        ev_ents = [e for e in entries if e.event_number == ev.event_number]
+
+        if p_search:
+            filtered_pairs = []
+            for ent in ev_ents:
+                res = results_by_entry_p.get(ent.entry_id)
+                if not res:
+                    continue
+                participants_str = (
+                    f"Relay {ent.relay_letter} ({', '.join(ent.athlete_ids)})"
+                    if ev.event_type == EventType.RELAY and ent.relay_letter
+                    else ", ".join(ent.athlete_ids)
+                )
+                if p_search in f"{ent.team_id} {participants_str}".lower():
+                    filtered_pairs.append((ent, res))
+            if not filtered_pairs:
+                continue
+        else:
+            filtered_pairs = [
+                (ent, results_by_entry_p[ent.entry_id])
+                for ent in ev_ents
+                if ent.entry_id in results_by_entry_p
+            ]
+
+        any_event_shown = True
+        g_lbl = "Girls" if ev.gender == "F" else "Boys"
+        st.markdown(f"#### Event {ev.event_number}: {g_lbl} {ev.name}")
+
+        if not filtered_pairs:
+            st.caption("No results recorded yet.")
+            continue
+
+        filtered_pairs.sort(key=lambda pair: (pair[1].place is None, pair[1].place or 999))
+        place_counts = Counter(r.place for _, r in filtered_pairs if r.place is not None)
+        tied_places = {p for p, cnt in place_counts.items() if cnt > 1}
+
+        ev_table_rows = []
+        for ent, res in filtered_pairs:
+            if ev.event_type == EventType.DIVING and res.diving_score is not None:
+                perf = f"{res.diving_score:.2f}"
+            elif res.official_time_cs is not None:
+                perf = format_cs_to_time(res.official_time_cs)
+            else:
+                perf = "—"
+
+            participants_str = (
+                f"Relay {ent.relay_letter} ({', '.join(ent.athlete_ids)})"
+                if ev.event_type == EventType.RELAY and ent.relay_letter
+                else ", ".join(ent.athlete_ids)
+            )
+            star = "*" if res.place in tied_places else ""
+            place_txt = (
+                f"{res.place}{star} (JD)"
+                if res.place is not None and res.manual_place is not None
+                else (f"{res.place}{star}" if res.place is not None else "—")
+            )
+
+            ev_table_rows.append(
+                {
+                    "Place": place_txt,
+                    "Team": ent.team_id,
+                    "Swimmer / Relay": participants_str,
+                    "Time / Score": perf,
+                    "Status": "" if res.status == ResultStatus.OK else res.status.value,
+                    "Exh": "Exh" if ent.is_exhibition else "",
+                    "Points": f"{res.points:g}",
+                }
+            )
+
+        st.table(ev_table_rows)
+        if tied_places:
+            st.caption(
+                "*Note: Per MIAA / NFHS Rule 7-1, tied place points are combined and divided equally."
+            )
+
+    if not any_event_shown:
+        st.info("No matching events or results to display.")
+
+    if p_auto_refresh:
+        time.sleep(15)
+        st.rerun()
+
+    st.stop()
+
+
+# ==============================================================================
+# FULL OFFICIAL / TABLE WORKER WORKSPACE
+# ==============================================================================
 with st.sidebar:
     st.header("Saved Meets & Switcher")
     meet_ids = [m["meet_id"] for m in all_meets]
@@ -584,8 +805,6 @@ with st.sidebar:
         st.rerun()
 
 
-# --- Main Area: Title Banner & Tabs ---
-meet_header_title = active_meet_meta["title"] if active_meet_meta else f"{team_a} vs {team_b}"
 st.title(f"MIAA / NFHS Dual Meet Scorer — {meet_header_title}")
 if is_meet_closed:
     st.warning(
