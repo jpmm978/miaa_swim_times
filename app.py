@@ -92,6 +92,18 @@ def compute_division_totals(team_a: str, team_b: str) -> dict[str, dict[str, flo
     return totals
 
 
+def render_leader_banner(label: str, score_a: float, score_b: float, name_a: str, name_b: str) -> None:
+    """Renders a compact highlight banner showing who currently leads a division."""
+    if score_a > score_b:
+        st.success(f"**{label} Leader:** {name_a} ({score_a:g} – {score_b:g})")
+    elif score_b > score_a:
+        st.success(f"**{label} Leader:** {name_b} ({score_b:g} – {score_a:g})")
+    elif score_a > 0 or score_b > 0:
+        st.info(f"**{label} Tied:** {score_a:g} – {score_b:g}")
+    else:
+        st.caption(f"{label}: No points scored yet")
+
+
 def get_athlete_usage() -> list[dict[str, str]]:
     """Builds a summary table of each athlete's total and individual event counts."""
     athletes = sorted({ath for e in entries for ath in e.athlete_ids})
@@ -151,15 +163,38 @@ with st.sidebar:
     st.header("Live Meet Scores")
     div_totals = compute_division_totals(team_a, team_b)
 
+    g_score_a = div_totals["F"].get(team_a, 0.0)
+    g_score_b = div_totals["F"].get(team_b, 0.0)
+    b_score_a = div_totals["M"].get(team_a, 0.0)
+    b_score_b = div_totals["M"].get(team_b, 0.0)
+
     st.subheader("Girls Division")
     g1, g2 = st.columns(2)
-    g1.metric(team_a, f"{div_totals['F'].get(team_a, 0.0):g}")
-    g2.metric(team_b, f"{div_totals['F'].get(team_b, 0.0):g}")
+    g1.metric(
+        team_a,
+        f"{g_score_a:g}",
+        delta="Leading" if g_score_a > g_score_b else None,
+    )
+    g2.metric(
+        team_b,
+        f"{g_score_b:g}",
+        delta="Leading" if g_score_b > g_score_a else None,
+    )
+    render_leader_banner("Girls", g_score_a, g_score_b, team_a, team_b)
 
     st.subheader("Boys Division")
     b1, b2 = st.columns(2)
-    b1.metric(team_a, f"{div_totals['M'].get(team_a, 0.0):g}")
-    b2.metric(team_b, f"{div_totals['M'].get(team_b, 0.0):g}")
+    b1.metric(
+        team_a,
+        f"{b_score_a:g}",
+        delta="Leading" if b_score_a > b_score_b else None,
+    )
+    b2.metric(
+        team_b,
+        f"{b_score_b:g}",
+        delta="Leading" if b_score_b > b_score_a else None,
+    )
+    render_leader_banner("Boys", b_score_a, b_score_b, team_a, team_b)
 
     st.divider()
     with st.expander("Athlete Event Counts (NFHS 3-2-1)"):
