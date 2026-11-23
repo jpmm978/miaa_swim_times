@@ -29,7 +29,7 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_def: s
 
 
 def init_db() -> None:
-    """Creates tables if they do not already exist and migrates existing data to multi-meet support."""
+    """Creates tables if they do not already exist and migrates existing data to multi-meet and multi-heat support."""
     now_iso = datetime.now().strftime("%Y-%m-%d %H:%M")
     with _get_conn() as conn:
         conn.execute(
@@ -97,12 +97,13 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS lineups (
                 meet_id TEXT NOT NULL DEFAULT 'default_meet',
                 event_number INTEGER NOT NULL,
+                heat_number INTEGER NOT NULL DEFAULT 1,
                 lane INTEGER NOT NULL,
                 team_id TEXT NOT NULL,
                 athlete_ids TEXT NOT NULL,
                 relay_letter TEXT,
                 is_exhibition INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (meet_id, event_number, lane)
+                PRIMARY KEY (meet_id, event_number, heat_number, lane)
             )
             """
         )
@@ -129,31 +130,35 @@ def init_db() -> None:
         _ensure_column(conn, "entries", "meet_id", "TEXT NOT NULL DEFAULT 'default_meet'")
         _ensure_column(conn, "entries", "heat_number", "INTEGER NOT NULL DEFAULT 1")
 
+        # Migrate lineups table to include meet_id and heat_number in the primary key
         lineup_cols = {
             row["name"] for row in conn.execute("PRAGMA table_info(lineups)").fetchall()
         }
-        if "meet_id" not in lineup_cols:
+        if "meet_id" not in lineup_cols or "heat_number" not in lineup_cols:
             conn.execute("ALTER TABLE lineups RENAME TO lineups_old")
             conn.execute(
                 """
                 CREATE TABLE lineups (
                     meet_id TEXT NOT NULL DEFAULT 'default_meet',
                     event_number INTEGER NOT NULL,
+                    heat_number INTEGER NOT NULL DEFAULT 1,
                     lane INTEGER NOT NULL,
                     team_id TEXT NOT NULL,
                     athlete_ids TEXT NOT NULL,
                     relay_letter TEXT,
                     is_exhibition INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (meet_id, event_number, lane)
+                    PRIMARY KEY (meet_id, event_number, heat_number, lane)
                 )
                 """
             )
+            meet_expr = "meet_id" if "meet_id" in lineup_cols else "'default_meet'"
+            heat_expr = "heat_number" if "heat_number" in lineup_cols else "1"
             conn.execute(
-                """
+                f"""
                 INSERT OR IGNORE INTO lineups (
-                    meet_id, event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                    meet_id, event_number, heat_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
                 )
-                SELECT 'default_meet', event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                SELECT {meet_expr}, event_number, {heat_expr}, lane, team_id, athlete_ids, relay_letter, is_exhibition
                 FROM lineups_old
                 """
             )
@@ -304,13 +309,14 @@ def restore_full_backup_json(raw_json: str) -> tuple[bool, str]:
             conn.execute(
                 """
                 INSERT INTO lineups (
-                    meet_id, event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                    meet_id, event_number, heat_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lu.get("meet_id") or "default_meet",
                     lu["event_number"],
+                    int(lu.get("heat_number") or 1),
                     lu["lane"],
                     lu["team_id"],
                     lu["athlete_ids"]
@@ -464,9 +470,9 @@ def create_new_meet(
             conn.execute(
                 """
                 INSERT INTO lineups (
-                    meet_id, event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                    meet_id, event_number, heat_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
                 )
-                SELECT ?, event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                SELECT ?, event_number, heat_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
                 FROM lineups
                 WHERE meet_id = ?
                 """,
@@ -777,49 +783,56 @@ def save_lineups(lineup_rows: list[dict], meet_id: Optional[str] = None) -> None
     with _get_conn() as conn:
         for row in lineup_rows:
             ev_num = row["event_number"]
+            heat_num = int(row.get("heat_number") or 1)
             lane = row["lane"]
             athletes = row.get("athlete_ids") or []
+            is_exh = bool(row.get("is_exhibition", False)) or (heat_num > 1)
             if athletes:
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO lineups (
-                        meet_id, event_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
+                        meet_id, event_number, heat_number, lane, team_id, athlete_ids, relay_letter, is_exhibition
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         target_id,
                         ev_num,
+                        heat_num,
                         lane,
                         row["team_id"],
                         json.dumps(athletes),
                         row.get("relay_letter"),
-                        int(bool(row.get("is_exhibition", False))),
+                        int(is_exh),
                     ),
                 )
             else:
                 conn.execute(
-                    "DELETE FROM lineups WHERE meet_id = ? AND event_number = ? AND lane = ?",
-                    (target_id, ev_num, lane),
+                    "DELETE FROM lineups WHERE meet_id = ? AND event_number = ? AND heat_number = ? AND lane = ?",
+                    (target_id, ev_num, heat_num, lane),
                 )
 
 
-def load_lineups(meet_id: Optional[str] = None) -> dict[tuple[int, int], dict]:
+def load_lineups(meet_id: Optional[str] = None) -> dict[tuple[int, int, int], dict]:
+    """Returns saved lineups keyed by (event_number, heat_number, lane)."""
     target_id = meet_id or get_active_meet_id()
     with _get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM lineups WHERE meet_id = ?", (target_id,)
         ).fetchall()
 
-    lineups: dict[tuple[int, int], dict] = {}
+    lineups: dict[tuple[int, int, int], dict] = {}
     for r in rows:
-        lineups[(r["event_number"], r["lane"])] = {
+        r_keys = set(r.keys())
+        heat_num = int(r["heat_number"]) if "heat_number" in r_keys and r["heat_number"] is not None else 1
+        lineups[(r["event_number"], heat_num, r["lane"])] = {
             "event_number": r["event_number"],
+            "heat_number": heat_num,
             "lane": r["lane"],
             "team_id": r["team_id"],
             "athlete_ids": json.loads(r["athlete_ids"]),
             "relay_letter": r["relay_letter"],
-            "is_exhibition": bool(r["is_exhibition"]),
+            "is_exhibition": bool(r["is_exhibition"]) or (heat_num > 1),
         }
     return lineups
 
@@ -900,6 +913,8 @@ def save_roster(team_id: str, swimmers: list[tuple[str, str]]) -> None:
             "INSERT OR REPLACE INTO roster (team_id, name, gender) VALUES (?, ?, ?)",
             [(team_id, name, gender) for name, gender in swimmers],
         )
+
+
 def add_roster_swimmer(team_id: str, name: str, gender: str) -> tuple[bool, str]:
     """Adds or updates a single swimmer on a team's saved roster."""
     clean_team = team_id.strip()
@@ -923,6 +938,7 @@ def add_roster_swimmer(team_id: str, name: str, gender: str) -> tuple[bool, str]
             (clean_team, clean_name, clean_gender),
         )
     return True, f"Added {clean_name} ({clean_gender}) to {clean_team}."
+
 
 def load_rosters() -> dict[tuple[str, str], list[str]]:
     """Returns a lookup dict mapping (team_id, gender) -> sorted list of swimmer names."""
@@ -951,6 +967,7 @@ def export_meet_csv(
         results,
         key=lambda r: (
             entries_by_id[r.entry_id].event_number,
+            getattr(entries_by_id[r.entry_id], "heat_number", 1),
             r.place is None,
             r.place or 999,
         ),
@@ -961,6 +978,7 @@ def export_meet_csv(
         output,
         fieldnames=[
             "Event #",
+            "Heat",
             "Gender",
             "Event Name",
             "Place",
@@ -977,6 +995,8 @@ def export_meet_csv(
     for res in sorted_results:
         ent = entries_by_id[res.entry_id]
         ev = events_by_num[ent.event_number]
+        heat_num = getattr(ent, "heat_number", 1)
+        is_exh = bool(ent.is_exhibition) or (heat_num > 1)
 
         if ev.event_type == EventType.DIVING:
             perf = f"{res.diving_score:.2f}" if res.diving_score is not None else ""
@@ -990,6 +1010,7 @@ def export_meet_csv(
         writer.writerow(
             {
                 "Event #": ev.event_number,
+                "Heat": heat_num,
                 "Gender": "Girls" if ev.gender == "F" else "Boys",
                 "Event Name": ev.name,
                 "Place": res.place if res.place is not None else "",
@@ -997,7 +1018,7 @@ def export_meet_csv(
                 "Participant": ", ".join(ent.athlete_ids),
                 "Official Time / Score": perf,
                 "Status": res.status.value,
-                "Exhibition": "Yes" if ent.is_exhibition else "No",
+                "Exhibition": "Yes" if is_exh else "No",
                 "Points": f"{res.points:g}",
             }
         )
