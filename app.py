@@ -14,18 +14,25 @@ from storage import (
     clear_all,
     clear_event,
     clear_lineups,
+    create_new_meet,
     delete_entry_and_result,
+    delete_meet,
     export_meet_csv,
+    get_active_meet_id,
     init_db,
+    list_meets,
     load_all_data,
     load_lineups,
     load_rosters,
     load_team_names,
     parse_roster_csv,
+    rename_meet,
     save_entry_and_result,
     save_lineups,
     save_roster,
     save_team_names,
+    set_active_meet,
+    set_meet_status,
     update_result_override,
 )
 from timing import calculate_official_time, format_cs_to_time, parse_time_to_cs
@@ -67,11 +74,16 @@ def build_miaa_events() -> list[Event]:
 STANDARD_EVENTS = build_miaa_events()
 EVENTS_BY_NUM = {e.event_number: e for e in STANDARD_EVENTS}
 
-# Load persisted state from SQLite on every run
-team_a_saved, team_b_saved = load_team_names()
-entries, results = load_all_data()
+# Load active meet and persisted state from SQLite on every run
+active_meet_id = get_active_meet_id()
+all_meets = list_meets()
+active_meet_meta = next((m for m in all_meets if m["meet_id"] == active_meet_id), None)
+is_meet_closed = bool(active_meet_meta and active_meet_meta.get("status") == "CLOSED")
+
+team_a_saved, team_b_saved = load_team_names(active_meet_id)
+entries, results = load_all_data(active_meet_id)
 rosters = load_rosters()
-lineups = load_lineups()
+lineups = load_lineups(active_meet_id)
 
 
 def compute_division_totals(team_a: str, team_b: str) -> dict[str, dict[str, float]]:
@@ -92,7 +104,9 @@ def compute_division_totals(team_a: str, team_b: str) -> dict[str, dict[str, flo
     return totals
 
 
-def render_leader_banner(label: str, score_a: float, score_b: float, name_a: str, name_b: str) -> None:
+def render_leader_banner(
+    label: str, score_a: float, score_b: float, name_a: str, name_b: str
+) -> None:
     """Renders a compact highlight banner showing who currently leads a division."""
     if score_a > score_b:
         st.success(f"**{label} Leader:** {name_a} ({score_a:g} – {score_b:g})")
@@ -126,13 +140,104 @@ def get_athlete_usage() -> list[dict[str, str]]:
     return summary
 
 
-# --- Sidebar: Team Setup, Rosters, Division Scoreboards, Usage Tracker & Exports ---
+# --- Sidebar: Meet Manager, Team Setup, Rosters, Division Scoreboards, Usage & Exports ---
 with st.sidebar:
+    st.header("Saved Meets & Switcher")
+    meet_ids = [m["meet_id"] for m in all_meets]
+    meet_labels = {
+        m["meet_id"]: (
+            f"{m['title']} "
+            f"[{'CLOSED' if m['status'] == 'CLOSED' else 'ACTIVE'}]"
+        )
+        for m in all_meets
+    }
+    current_idx = meet_ids.index(active_meet_id) if active_meet_id in meet_ids else 0
+    picked_meet_id = st.selectbox(
+        "Active / Saved Meet",
+        options=meet_ids,
+        index=current_idx,
+        format_func=lambda mid: meet_labels.get(mid, mid),
+        key="meet_switcher_select",
+    )
+    if picked_meet_id != active_meet_id:
+        set_active_meet(picked_meet_id)
+        for key in list(st.session_state.keys()):
+            if key.startswith("lu_ev"):
+                del st.session_state[key]
+        st.rerun()
+
+    if active_meet_meta:
+        status_badge = "CLOSED (Archived)" if is_meet_closed else "ACTIVE"
+        st.caption(
+            f"Status: **{status_badge}** · Created: {active_meet_meta.get('created_at', '')}"
+            + (
+                f" · Closed: {active_meet_meta['closed_at']}"
+                if active_meet_meta.get("closed_at")
+                else ""
+            )
+        )
+
+    c_close, _ = st.columns(2)
+    if not is_meet_closed:
+        if c_close.button("Close Meet", use_container_width=True):
+            set_meet_status(active_meet_id, "CLOSED")
+            st.rerun()
+    else:
+        if c_close.button("Reopen Meet", use_container_width=True):
+            set_meet_status(active_meet_id, "ACTIVE")
+            st.rerun()
+
+    with st.expander("New / Save Meet"):
+        with st.form("new_meet_form", clear_on_submit=True):
+            new_title = st.text_input(
+                "Meet Name",
+                placeholder="e.g., Gardner vs Winchendon (Nov 23)",
+            )
+            new_team_a = st.text_input("Home Team (Even Lanes)", value=team_a_saved)
+            new_team_b = st.text_input("Visitor Team (Odd Lanes)", value=team_b_saved)
+            copy_lu = st.checkbox("Copy current lane lineups into new meet", value=False)
+            if st.form_submit_button("Start New Meet", type="primary"):
+                new_id = f"meet_{uuid.uuid4().hex[:8]}"
+                create_new_meet(
+                    meet_id=new_id,
+                    title=new_title,
+                    team_a=new_team_a,
+                    team_b=new_team_b,
+                    copy_lineups_from_current=copy_lu,
+                )
+                for key in list(st.session_state.keys()):
+                    if key.startswith("lu_ev"):
+                        del st.session_state[key]
+                st.rerun()
+
+        if active_meet_meta:
+            with st.form("rename_meet_form"):
+                renamed_title = st.text_input(
+                    "Rename Current Meet",
+                    value=active_meet_meta.get("title", ""),
+                )
+                if st.form_submit_button("Save Meet Name"):
+                    rename_meet(active_meet_id, renamed_title)
+                    st.rerun()
+
+        if st.button("Delete Selected Meet", type="secondary"):
+            delete_meet(active_meet_id)
+            st.rerun()
+
+    st.divider()
     st.header("Meet Setup")
-    team_a = st.text_input("Team A (Home - Even Lanes)", value=team_a_saved)
-    team_b = st.text_input("Team B (Visitor - Odd Lanes)", value=team_b_saved)
-    if (team_a, team_b) != (team_a_saved, team_b_saved):
-        save_team_names(team_a, team_b)
+    team_a = st.text_input(
+        "Team A (Home - Even Lanes)",
+        value=team_a_saved,
+        disabled=is_meet_closed,
+    )
+    team_b = st.text_input(
+        "Team B (Visitor - Odd Lanes)",
+        value=team_b_saved,
+        disabled=is_meet_closed,
+    )
+    if not is_meet_closed and (team_a, team_b) != (team_a_saved, team_b_saved):
+        save_team_names(team_a, team_b, active_meet_id)
 
     with st.expander("Import Team Rosters (CSV)"):
         st.caption("CSV columns: `Name,Gender` (`F`/`M`)")
@@ -219,7 +324,6 @@ with st.sidebar:
     b_events, b_entries, b_results = _division_slice("M")
     safe_matchup = f"{team_a}_vs_{team_b}".replace(" ", "_")
 
-    # --- 1-Page Printable Reports (HTML) ---
     st.caption("1-Page Official Report (HTML)")
     h1, h2 = st.columns(2)
     h1.download_button(
@@ -255,7 +359,6 @@ with st.sidebar:
         use_container_width=True,
     )
 
-    # --- CSV Exports ---
     st.caption("Results Spreadsheet (CSV)")
     c1, c2 = st.columns(2)
     c1.download_button(
@@ -275,7 +378,6 @@ with st.sidebar:
         use_container_width=True,
     )
 
-    # --- Hy-Tek (.sd3) Exports ---
     st.caption("Hy-Tek Team Manager (.sd3)")
     s1, s2 = st.columns(2)
     s1.download_button(
@@ -304,13 +406,20 @@ with st.sidebar:
         disabled=len(b_results) == 0,
         use_container_width=True,
     )
-    if st.button("Reset Entire Meet", type="secondary"):
-        clear_all()
+    if st.button("Reset Current Meet", type="secondary", disabled=is_meet_closed):
+        clear_all(active_meet_id)
         st.rerun()
 
 
-# --- Main Area: Tabs ---
-st.title("MIAA / NFHS Dual Meet Scorer")
+# --- Main Area: Title Banner & Tabs ---
+meet_header_title = active_meet_meta["title"] if active_meet_meta else f"{team_a} vs {team_b}"
+st.title(f"MIAA / NFHS Dual Meet Scorer — {meet_header_title}")
+if is_meet_closed:
+    st.warning(
+        "This meet is **CLOSED** (archived). You can view, print, or export results anytime, "
+        "or click **Reopen Meet** in the sidebar to make edits."
+    )
+
 tab_scoring, tab_lineup = st.tabs(["Event Scoring", "Batch Lineup & Seeding"])
 
 
@@ -383,7 +492,7 @@ with tab_scoring:
             is_exhibition = d6.checkbox("Exhibition")
             override_limits = st.checkbox("Override NFHS entry limit warnings")
 
-            if st.form_submit_button("Record Dive Score", type="primary"):
+            if st.form_submit_button("Record Dive Score", type="primary", disabled=is_meet_closed):
                 if not diver_name.strip():
                     st.error("Please enter a diver name.")
                 else:
@@ -409,7 +518,7 @@ with tab_scoring:
                             status=ResultStatus(status_choice),
                             manual_place=None if jd_choice == "Auto" else int(jd_choice),
                         )
-                        save_entry_and_result(new_entry, new_result)
+                        save_entry_and_result(new_entry, new_result, active_meet_id)
                         st.rerun()
     else:
         is_relay = selected_event.event_type == EventType.RELAY
@@ -599,7 +708,9 @@ with tab_scoring:
                 )
 
             override_limits = st.checkbox("Override NFHS entry limit warnings for this heat")
-            submitted_heat = st.form_submit_button("Record Heat Results", type="primary")
+            submitted_heat = st.form_submit_button(
+                "Record Heat Results", type="primary", disabled=is_meet_closed
+            )
 
             if submitted_heat:
                 pending_pairs: list[tuple[Entry, Result]] = []
@@ -608,7 +719,7 @@ with tab_scoring:
                 for row in lane_inputs:
                     athlete_list = row["names"]
                     if not athlete_list:
-                        continue  # Skip empty lane
+                        continue
 
                     try:
                         watch_cs = parse_time_to_cs(row["watch"]) if row["watch"].strip() else None
@@ -666,7 +777,7 @@ with tab_scoring:
                         )
                     else:
                         for ent, res in pending_pairs:
-                            save_entry_and_result(ent, res)
+                            save_entry_and_result(ent, res, active_meet_id)
                         st.rerun()
 
     # --- Event Results Table ---
@@ -772,7 +883,7 @@ with tab_scoring:
                     placeholder="e.g., Watch malfunction - visual 1st",
                 )
 
-                if st.form_submit_button("Save JD Override", type="primary"):
+                if st.form_submit_button("Save JD Override", type="primary", disabled=is_meet_closed):
                     update_result_override(
                         entry_id=selected_entry_id,
                         manual_place=None if new_jd == "Auto" else int(new_jd),
@@ -791,12 +902,13 @@ with tab_scoring:
                 "Delete Selected Result",
                 type="secondary",
                 key=f"del_btn_ev_{selected_event.event_number}",
+                disabled=is_meet_closed,
             ):
                 delete_entry_and_result(delete_entry_id)
                 st.rerun()
 
-        if st.button(f"Clear Event {selected_event.event_number} Results"):
-            clear_event(selected_event.event_number)
+        if st.button(f"Clear Event {selected_event.event_number} Results", disabled=is_meet_closed):
+            clear_event(selected_event.event_number, active_meet_id)
             st.rerun()
 
 
@@ -959,7 +1071,9 @@ with tab_lineup:
         override_lineup_limits = st.checkbox(
             "Override NFHS entry limit warnings for this lineup"
         )
-        submitted_lineups = st.form_submit_button("Save All Lineups", type="primary")
+        submitted_lineups = st.form_submit_button(
+            "Save All Lineups", type="primary", disabled=is_meet_closed
+        )
 
         if submitted_lineups:
             merged_lineups = dict(lineups)
@@ -999,7 +1113,7 @@ with tab_lineup:
                     "Lineup not saved. Fix the entries above or check 'Override NFHS entry limit warnings' to save anyway."
                 )
             else:
-                save_lineups(pending_lineups)
+                save_lineups(pending_lineups, active_meet_id)
                 st.success("Lineups saved and synced to Event Scoring.")
                 st.rerun()
 
@@ -1007,10 +1121,10 @@ with tab_lineup:
     if st.button(
         "Clear All Lineups",
         type="secondary",
-        disabled=len(lineups) == 0,
+        disabled=len(lineups) == 0 or is_meet_closed,
         help="Clears all saved lane assignments across all events. Rosters and recorded results are not affected.",
     ):
-        clear_lineups()
+        clear_lineups(active_meet_id)
         for key in list(st.session_state.keys()):
             if key.startswith("lu_ev"):
                 del st.session_state[key]
