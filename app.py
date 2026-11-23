@@ -7,27 +7,19 @@ import streamlit.components.v1 as components
 
 from models import Entry, Event, EventType, Result, ResultStatus
 try:
-    from reports_exports import (
+    from report_export import (
         export_event_pair_timer_sheets_html,
         export_heat_sheet_html,
         export_lane_timer_sheets_html,
         export_meet_html,
     )
 except ImportError:
-    from report_export import (  # type: ignore[no-redef]
+    from reports_exports import (  # type: ignore[no-redef]
+        export_event_pair_timer_sheets_html,
         export_heat_sheet_html,
         export_lane_timer_sheets_html,
         export_meet_html,
     )
-
-    def export_event_pair_timer_sheets_html(  # type: ignore[no-redef]
-        team_a: str,
-        team_b: str,
-        events: list[Event],
-        lineups: dict,
-        meet_date=None,
-    ) -> str:
-        return export_lane_timer_sheets_html(team_a, team_b, events, lineups)
 from scoring import MeetFormat, score_event
 from sdif_export import export_meet_sd3
 from storage import (
@@ -1646,6 +1638,12 @@ with tab_lineup:
         "Show Division", ["All", "Girls", "Boys"], horizontal=True, key="lineup_div_filter"
     )
 
+    only_populated_cards = st.checkbox(
+        "Only print Event Timer Cards for events with lineups or results",
+        value=False,
+        key="only_populated_timer_cards",
+    )
+
     heat_sheet_html = export_heat_sheet_html(
         team_a=team_a,
         team_b=team_b,
@@ -1680,6 +1678,9 @@ with tab_lineup:
         team_b=team_b,
         events=STANDARD_EVENTS,
         lineups=lineups,
+        only_populated=only_populated_cards,
+        entries=entries,
+        results=results,
     )
     lu_pair_col.download_button(
         label="Event Timer Cards (G/B)",
