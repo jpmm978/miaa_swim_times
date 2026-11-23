@@ -36,6 +36,11 @@ SCORING_CONFIGS: dict[MeetFormat, ScoringConfig] = {
 }
 
 
+def _is_exhibition_entry(entry: Entry) -> bool:
+    """Returns True if marked exhibition or in Heat 2 or higher."""
+    return bool(entry.is_exhibition) or (getattr(entry, "heat_number", 1) > 1)
+
+
 def _performance_key(result: Result, event_type: EventType) -> Optional[float]:
     """Returns the comparable metric for ranking, or None if missing."""
     if event_type == EventType.DIVING:
@@ -105,10 +110,11 @@ def score_event(
     """
     Scores a single event according to MIAA/NFHS rules, honoring official
     manual_place (Judge's Decision) overrides when present.
+    Heats after Heat 1 (heat_number > 1) are treated as exhibition and earn 0 points.
 
-    - Updates `place` and `points` on each Result object in place.
-    - Returns a dict mapping `team_id` -> total points earned in this event.
-    - Pass `team_filter` (e.g., {"TEAM_A", "TEAM_B"}) to score head-to-head
+- Updates `place` and `points` on each Result object in place.
+- Returns a dict mapping `team_id` -> total points earned in this event.
+- Pass `team_filter` (e.g., {"TEAM_A", "TEAM_B"}) to score head-to-head
       in a double-dual or triple-dual meet.
     """
     config = SCORING_CONFIGS[meet_format]
@@ -135,7 +141,7 @@ def score_event(
 
         if team_filter and entry.team_id not in team_filter:
             continue
-        if res.status != ResultStatus.OK or entry.is_exhibition:
+        if res.status != ResultStatus.OK or _is_exhibition_entry(entry):
             continue
         if _performance_key(res, event.event_type) is None and res.manual_place is None:
             continue
