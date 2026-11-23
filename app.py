@@ -712,7 +712,19 @@ with st.sidebar:
         count_a = len(rosters.get((team_a, "F"), [])) + len(rosters.get((team_a, "M"), []))
         count_b = len(rosters.get((team_b, "F"), [])) + len(rosters.get((team_b, "M"), []))
         st.caption(f"Saved: {team_a} ({count_a}) | {team_b} ({count_b})")
-
+st.divider()
+        st.caption("Add Missing Swimmer to Saved Roster")
+        with st.form("quick_add_swimmer_form", clear_on_submit=True):
+            qa_team = st.selectbox("Team", [team_a, team_b], key="qa_swimmer_team")
+            qa_name = st.text_input("Swimmer Name", placeholder="Last, First")
+            qa_gender = st.selectbox("Division / Gender", ["F", "M"], key="qa_swimmer_gender")
+            if st.form_submit_button("Add Swimmer to Roster"):
+                ok, msg = add_roster_swimmer(qa_team, qa_name, qa_gender)
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
     st.divider()
     st.header("Live Meet Scores")
     div_totals = compute_division_totals(team_a, team_b)
