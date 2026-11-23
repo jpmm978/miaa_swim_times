@@ -6,11 +6,18 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from models import Entry, Event, EventType, Result, ResultStatus
-from report_export import (
-    export_heat_sheet_html,
-    export_lane_timer_sheets_html,
-    export_meet_html,
-)
+try:
+    from reports_exports import (
+        export_heat_sheet_html,
+        export_lane_timer_sheets_html,
+        export_meet_html,
+    )
+except ImportError:
+    from report_export import (  # type: ignore[no-redef]
+        export_heat_sheet_html,
+        export_lane_timer_sheets_html,
+        export_meet_html,
+    )
 from scoring import MeetFormat, score_event
 from sdif_export import export_meet_sd3
 from storage import (
@@ -64,6 +71,7 @@ BASE_EVENTS = [
 ]
 
 JD_OPTIONS = ["Auto", 1, 2, 3, 4, 5, 6]
+HEAT_OPTIONS = [1, 2, 3, 4]
 
 SIGNATURE_ROLES = [
     ("referee", "Meet Referee"),
@@ -103,6 +111,10 @@ entries, results = load_all_data(active_meet_id)
 rosters = load_rosters()
 lineups = load_lineups(active_meet_id)
 saved_signatures = load_meet_signatures(active_meet_id)
+
+
+def _is_entry_exhibition(entry: Entry) -> bool:
+    return bool(entry.is_exhibition) or (getattr(entry, "heat_number", 1) > 1)
 
 
 def _call_export_meet_html(
@@ -286,8 +298,11 @@ def build_scoring_audit_rows(team_a: str, team_b: str, gender_filter: str) -> li
         place_counts = Counter(r.place for r in ev_results if r.place is not None)
         has_tie = any(cnt > 1 for cnt in place_counts.values())
         has_jd = any(r.manual_place is not None for r in ev_results)
+        heat_nums = sorted({getattr(e, "heat_number", 1) for e in ev_entries.values()})
 
         notes: list[str] = []
+        if len(heat_nums) > 1 or max(heat_nums, default=1) > 1:
+            notes.append(f"Heats {','.join(str(h) for h in heat_nums)}")
         if has_tie:
             notes.append("Tie (Rule 7-1)")
         if has_jd:
@@ -444,10 +459,13 @@ if is_parent_view:
                     if res.place is not None and res.manual_place is not None
                     else (f"{res.place}{star}" if res.place is not None else "—")
                 )
+                heat_num = getattr(ent, "heat_number", 1)
+                exh_flag = _is_entry_exhibition(ent)
 
                 matched_rows.append(
                     {
                         "Event #": ev.event_number,
+                        "Heat": f"H{heat_num}",
                         "Division": "Girls" if ev.gender == "F" else "Boys",
                         "Event": ev.name,
                         "Place": place_txt,
@@ -455,7 +473,7 @@ if is_parent_view:
                         "Swimmer / Relay": participants_str,
                         "Time / Score": perf,
                         "Status": "" if res.status == ResultStatus.OK else res.status.value,
-                        "Exh": "Exh" if ent.is_exhibition else "",
+                        "Exh": "Exh" if exh_flag else "",
                         "Points": f"{res.points:g}",
                     }
                 )
@@ -507,7 +525,13 @@ if is_parent_view:
             st.caption("No results recorded yet.")
             continue
 
-        filtered_pairs.sort(key=lambda pair: (pair[1].place is None, pair[1].place or 999))
+        filtered_pairs.sort(
+            key=lambda pair: (
+                getattr(pair[0], "heat_number", 1),
+                pair[1].place is None,
+                pair[1].place or 999,
+            )
+        )
         place_counts = Counter(r.place for _, r in filtered_pairs if r.place is not None)
         tied_places = {p for p, cnt in place_counts.items() if cnt > 1}
 
@@ -531,15 +555,18 @@ if is_parent_view:
                 if res.place is not None and res.manual_place is not None
                 else (f"{res.place}{star}" if res.place is not None else "—")
             )
+            heat_num = getattr(ent, "heat_number", 1)
+            exh_flag = _is_entry_exhibition(ent)
 
             ev_table_rows.append(
                 {
+                    "Heat": f"H{heat_num}",
                     "Place": place_txt,
                     "Team": ent.team_id,
                     "Swimmer / Relay": participants_str,
                     "Time / Score": perf,
                     "Status": "" if res.status == ResultStatus.OK else res.status.value,
-                    "Exh": "Exh" if ent.is_exhibition else "",
+                    "Exh": "Exh" if exh_flag else "",
                     "Points": f"{res.points:g}",
                 }
             )
@@ -959,6 +986,7 @@ with tab_scoring:
                         team_id=team_choice,
                         athlete_ids=[diver_name.strip()],
                         is_exhibition=is_exhibition,
+                        heat_number=1,
                     )
                     violations = validate_athlete_entries(
                         diver_name.strip(), entries + [new_entry], EVENTS_BY_NUM
@@ -979,10 +1007,24 @@ with tab_scoring:
     else:
         is_relay = selected_event.event_type == EventType.RELAY
         st.subheader(f"6-Lane Heat Entry — {gender_label} {selected_event.name}")
-        st.caption(
-            "Pre-filled from Batch Lineup if saved. Leave unused lanes blank. "
-            "Use JD only for an official Judge's Decision place override."
+
+        selected_heat = st.selectbox(
+            "Heat Number",
+            options=HEAT_OPTIONS,
+            format_func=lambda h: f"Heat {h} (Scoring)" if h == 1 else f"Heat {h} (Exhibition Only)",
+            key=f"heat_num_ev_{selected_event.event_number}",
         )
+        is_exh_heat = selected_heat > 1
+        if is_exh_heat:
+            st.info(
+                f"Heat {selected_heat} is an **Exhibition** heat: times and swimmer event counts are recorded, "
+                "but entries will not count toward team scoring."
+            )
+        else:
+            st.caption(
+                "Pre-filled from Batch Lineup if saved. Leave unused lanes blank. "
+                "Use JD only for an official Judge's Decision place override."
+            )
 
         with st.form(f"heat_grid_ev_{selected_event.event_number}", clear_on_submit=True):
             if is_relay:
@@ -1023,14 +1065,14 @@ with tab_scoring:
 
             for lane in range(1, 7):
                 cols = st.columns(col_spec)
-                saved = lineups.get((selected_event.event_number, lane), {})
+                saved = lineups.get((selected_event.event_number, lane), {}) if selected_heat == 1 else {}
                 default_team_idx = 0 if lane % 2 == 0 else 1  # Even = Home, Odd = Visitor
                 if saved.get("team_id") in teams:
                     default_team_idx = teams.index(saved["team_id"])
                 default_team = teams[default_team_idx]
                 lane_roster = rosters.get((default_team, selected_event.gender), [])
                 saved_names = saved.get("athlete_ids", [])
-                key_prefix = f"ev{selected_event.event_number}_l{lane}"
+                key_prefix = f"ev{selected_event.event_number}_h{selected_heat}_l{lane}"
 
                 cols[0].markdown(f"### {lane}")
                 l_team = cols[1].selectbox(
@@ -1088,7 +1130,7 @@ with tab_scoring:
                     )
                     l_exh = cols[8].checkbox(
                         "Exh",
-                        value=saved.get("is_exhibition", False),
+                        value=bool(saved.get("is_exhibition", False)) or is_exh_heat,
                         key=f"{key_prefix}_exh",
                         label_visibility="collapsed",
                     )
@@ -1140,7 +1182,7 @@ with tab_scoring:
                     )
                     l_exh = cols[7].checkbox(
                         "Exh",
-                        value=saved.get("is_exhibition", False),
+                        value=bool(saved.get("is_exhibition", False)) or is_exh_heat,
                         key=f"{key_prefix}_exh",
                         label_visibility="collapsed",
                     )
@@ -1158,7 +1200,7 @@ with tab_scoring:
                         "backups": l_backups,
                         "status": l_status,
                         "jd": None if l_jd == "Auto" else int(l_jd),
-                        "exh": l_exh,
+                        "exh": bool(l_exh) or is_exh_heat,
                         "malf": l_malf,
                     }
                 )
@@ -1196,8 +1238,9 @@ with tab_scoring:
                         event_number=selected_event.event_number,
                         team_id=row["team"],
                         athlete_ids=athlete_list,
-                        is_exhibition=row["exh"],
+                        is_exhibition=bool(row["exh"]) or is_exh_heat,
                         relay_letter=row["relay"].strip() if row["relay"] else None,
+                        heat_number=selected_heat,
                     )
                     new_result = Result(
                         entry_id=entry_id,
@@ -1248,7 +1291,13 @@ with tab_scoring:
     if not event_results:
         st.info("No results recorded for this event yet.")
     else:
-        event_results.sort(key=lambda r: (r.place is None, r.place or 999))
+        event_results.sort(
+            key=lambda r: (
+                getattr(event_entries[r.entry_id], "heat_number", 1),
+                r.place is None,
+                r.place or 999,
+            )
+        )
 
         place_counts = Counter(r.place for r in event_results if r.place is not None)
         tied_places = {p for p, count in place_counts.items() if count > 1}
@@ -1256,6 +1305,9 @@ with tab_scoring:
         rows = []
         for res in event_results:
             ent = event_entries[res.entry_id]
+            heat_num = getattr(ent, "heat_number", 1)
+            exh_flag = _is_entry_exhibition(ent)
+
             perf_display = (
                 f"{res.diving_score:.2f}"
                 if selected_event.event_type == EventType.DIVING and res.diving_score is not None
@@ -1282,12 +1334,13 @@ with tab_scoring:
 
             rows.append(
                 {
+                    "Heat": f"H{heat_num}",
                     "Place": place_display,
                     "Team": ent.team_id,
                     "Participant": participant_display,
                     "Official Time / Score": perf_display,
                     "Status": res.status.value,
-                    "Exh": "Yes" if ent.is_exhibition else "",
+                    "Exh": "Yes" if exh_flag else "",
                     "Points": f"{res.points:g}",
                 }
             )
@@ -1303,6 +1356,7 @@ with tab_scoring:
 
         result_options = {
             res.entry_id: (
+                f"H{getattr(event_entries[res.entry_id], 'heat_number', 1)} · "
                 f"{event_entries[res.entry_id].team_id} — "
                 f"{', '.join(event_entries[res.entry_id].athlete_ids)} "
                 f"(Place: {res.place if res.place is not None else '—'}"
@@ -1322,6 +1376,8 @@ with tab_scoring:
             )
             cur_entry = event_entries[edit_entry_id]
             cur_res = results_by_id[edit_entry_id]
+            cur_heat = getattr(cur_entry, "heat_number", 1)
+            cur_heat_idx = HEAT_OPTIONS.index(cur_heat) if cur_heat in HEAT_OPTIONS else 0
             teams_list = [team_a, team_b]
             cur_team_idx = teams_list.index(cur_entry.team_id) if cur_entry.team_id in teams_list else 0
             status_list = [s.value for s in ResultStatus]
@@ -1338,8 +1394,14 @@ with tab_scoring:
             edit_roster = rosters.get((cur_entry.team_id, selected_event.gender), [])
 
             with st.form(f"edit_res_form_ev_{selected_event.event_number}_{edit_entry_id}"):
-                f1, f2, f3 = st.columns([1.4, 2.2, 1.0])
+                f1, f2, f3, f4 = st.columns([1.3, 2.0, 0.85, 0.85])
                 upd_team = f1.selectbox("Team", teams_list, index=cur_team_idx)
+                upd_heat = f3.selectbox(
+                    "Heat",
+                    options=HEAT_OPTIONS,
+                    index=cur_heat_idx,
+                    format_func=lambda h: f"Heat {h}",
+                )
 
                 if selected_event.event_type == EventType.RELAY:
                     if edit_roster:
@@ -1355,7 +1417,7 @@ with tab_scoring:
                             value=", ".join(cur_entry.athlete_ids),
                         )
                         upd_athletes = [n.strip() for n in raw_upd_rly.split(",") if n.strip()]
-                    upd_relay = f3.text_input(
+                    upd_relay = f4.text_input(
                         "Relay Letter",
                         value=cur_entry.relay_letter or "A",
                     )
@@ -1370,7 +1432,7 @@ with tab_scoring:
                     else:
                         raw_upd_ath = f2.text_input("Athlete Name", value=cur_single)
                         upd_athletes = [raw_upd_ath.strip()] if raw_upd_ath.strip() else []
-                    f3.caption("Individual / Dive")
+                    f4.caption("Ind / Dive")
 
                 if selected_event.event_type == EventType.DIVING:
                     p1, p2, p3, p4 = st.columns([1.5, 1.2, 1.0, 1.3])
@@ -1415,7 +1477,9 @@ with tab_scoring:
                     s1, s2, s3 = st.columns([1.3, 1.2, 1.5])
                     upd_status = s1.selectbox("Status", status_list, index=cur_status_idx)
                     upd_jd = s2.selectbox("JD Place", JD_OPTIONS, index=cur_jd_idx)
-                    upd_exh = s3.checkbox("Exhibition", value=cur_entry.is_exhibition)
+                    upd_exh = s3.checkbox(
+                        "Exhibition", value=bool(cur_entry.is_exhibition) or (upd_heat > 1)
+                    )
                     upd_dive = None
 
                 upd_note = st.text_input(
@@ -1463,10 +1527,11 @@ with tab_scoring:
                                 event_number=cur_entry.event_number,
                                 team_id=upd_team,
                                 athlete_ids=upd_athletes,
-                                is_exhibition=upd_exh,
+                                is_exhibition=bool(upd_exh) or (int(upd_heat) > 1),
                                 relay_letter=(
                                     upd_relay.strip() if upd_relay else None
                                 ),
+                                heat_number=int(upd_heat),
                             )
                             other_entries = [
                                 e for e in entries if e.entry_id != cur_entry.entry_id
@@ -1780,7 +1845,13 @@ with tab_audit:
             if entries_by_id_all.get(r.entry_id)
             and entries_by_id_all[r.entry_id].event_number == ev.event_number
         ]
-        ev_res_list.sort(key=lambda r: (r.place is None, r.place or 999))
+        ev_res_list.sort(
+            key=lambda r: (
+                getattr(entries_by_id_all[r.entry_id], "heat_number", 1),
+                r.place is None,
+                r.place or 999,
+            )
+        )
         g_lbl = "Girls" if ev.gender == "F" else "Boys"
 
         with st.expander(
@@ -1793,6 +1864,8 @@ with tab_audit:
                 detail_rows = []
                 for r in ev_res_list:
                     ent = entries_by_id_all[r.entry_id]
+                    heat_num = getattr(ent, "heat_number", 1)
+                    exh_flag = _is_entry_exhibition(ent)
                     perf = (
                         f"{r.diving_score:.2f}"
                         if ev.event_type == EventType.DIVING and r.diving_score is not None
@@ -1804,6 +1877,7 @@ with tab_audit:
                     )
                     detail_rows.append(
                         {
+                            "Heat": f"H{heat_num}",
                             "Place": (
                                 f"{r.place} (JD)"
                                 if r.place is not None and r.manual_place is not None
@@ -1813,7 +1887,7 @@ with tab_audit:
                             "Participant": ", ".join(ent.athlete_ids),
                             "Time / Score": perf,
                             "Status": r.status.value,
-                            "Exh": "Yes" if ent.is_exhibition else "",
+                            "Exh": "Yes" if exh_flag else "",
                             "Points": f"{r.points:g}",
                             "Note": r.override_note or "—",
                         }
