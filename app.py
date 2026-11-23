@@ -331,4 +331,216 @@ else:
                     "Rly", value="A", key=f"{key_prefix}_rly", label_visibility="collapsed"
                 )
                 if lane_roster:
-                    l_names = cols[3].multiselect
+                    l_names = cols[3].multiselect(
+                        "Swimmers",
+                        options=lane_roster,
+                        max_selections=4,
+                        placeholder="Select 4 swimmers...",
+                        key=f"{key_prefix}_names",
+                        label_visibility="collapsed",
+                    )
+                else:
+                    raw_names = cols[3].text_input(
+                        "Swimmers",
+                        placeholder="Smith, Jones, Lee, Patel",
+                        key=f"{key_prefix}_names",
+                        label_visibility="collapsed",
+                    )
+                    l_names = [n.strip() for n in raw_names.split(",") if n.strip()]
+
+                l_pad = cols[4].text_input(
+                    "Pad",
+                    placeholder="1:45.20",
+                    key=f"{key_prefix}_pad",
+                    label_visibility="collapsed",
+                )
+                l_backups = cols[5].text_input(
+                    "Backups",
+                    placeholder="1:45.21, 1:45.25",
+                    key=f"{key_prefix}_bkp",
+                    label_visibility="collapsed",
+                )
+                l_status = cols[6].selectbox(
+                    "Status", statuses, key=f"{key_prefix}_stat", label_visibility="collapsed"
+                )
+                l_jd = cols[7].selectbox(
+                    "JD", JD_OPTIONS, key=f"{key_prefix}_jd", label_visibility="collapsed"
+                )
+                l_exh = cols[8].checkbox("Exh", key=f"{key_prefix}_exh", label_visibility="collapsed")
+                l_malf = cols[9].checkbox("Malf", key=f"{key_prefix}_malf", label_visibility="collapsed")
+            else:
+                l_relay = None
+                if lane_roster:
+                    selected_swimmer = cols[2].selectbox(
+                        "Swimmer",
+                        options=[""] + lane_roster,
+                        key=f"{key_prefix}_names",
+                        label_visibility="collapsed",
+                    )
+                    l_names = [selected_swimmer] if selected_swimmer else []
+                else:
+                    raw_name = cols[2].text_input(
+                        "Swimmer",
+                        placeholder="Last, First",
+                        key=f"{key_prefix}_names",
+                        label_visibility="collapsed",
+                    )
+                    l_names = [raw_name.strip()] if raw_name.strip() else []
+
+                l_pad = cols[3].text_input(
+                    "Pad",
+                    placeholder="24.51",
+                    key=f"{key_prefix}_pad",
+                    label_visibility="collapsed",
+                )
+                l_backups = cols[4].text_input(
+                    "Backups",
+                    placeholder="24.51, 24.52",
+                    key=f"{key_prefix}_bkp",
+                    label_visibility="collapsed",
+                )
+                l_status = cols[5].selectbox(
+                    "Status", statuses, key=f"{key_prefix}_stat", label_visibility="collapsed"
+                )
+                l_jd = cols[6].selectbox(
+                    "JD", JD_OPTIONS, key=f"{key_prefix}_jd", label_visibility="collapsed"
+                )
+                l_exh = cols[7].checkbox("Exh", key=f"{key_prefix}_exh", label_visibility="collapsed")
+                l_malf = cols[8].checkbox("Malf", key=f"{key_prefix}_malf", label_visibility="collapsed")
+
+            lane_inputs.append(
+                {
+                    "lane": lane,
+                    "team": l_team,
+                    "relay": l_relay,
+                    "names": l_names,
+                    "pad": l_pad,
+                    "backups": l_backups,
+                    "status": l_status,
+                    "jd": None if l_jd == "Auto" else int(l_jd),
+                    "exh": l_exh,
+                    "malf": l_malf,
+                }
+            )
+
+        override_limits = st.checkbox("Override NFHS entry limit warnings for this heat")
+        submitted_heat = st.form_submit_button("Record Heat Results", type="primary")
+
+        if submitted_heat:
+            pending_pairs: list[tuple[Entry, Result]] = []
+            parse_errors: list[str] = []
+
+            for row in lane_inputs:
+                athlete_list = row["names"]
+                if not athlete_list:
+                    continue  # Skip empty lane
+
+                try:
+                    pad_cs = parse_time_to_cs(row["pad"]) if row["pad"].strip() else None
+                    backups_cs = [
+                        parse_time_to_cs(t) for t in row["backups"].split(",") if t.strip()
+                    ]
+                except ValueError:
+                    parse_errors.append(
+                        f"Lane {row['lane']}: Invalid time format (use SS.cc or MM:SS.cc)."
+                    )
+                    continue
+
+                official_cs = calculate_official_time(pad_cs, backups_cs, row["malf"])
+                entry_id = str(uuid.uuid4())[:8]
+
+                new_entry = Entry(
+                    entry_id=entry_id,
+                    event_number=selected_event.event_number,
+                    team_id=row["team"],
+                    athlete_ids=athlete_list,
+                    is_exhibition=row["exh"],
+                    relay_letter=row["relay"].strip() if row["relay"] else None,
+                )
+                new_result = Result(
+                    entry_id=entry_id,
+                    pad_time_cs=pad_cs,
+                    backup_times_cs=backups_cs,
+                    status=ResultStatus(row["status"]),
+                    official_time_cs=official_cs,
+                    manual_place=row["jd"],
+                )
+                pending_pairs.append((new_entry, new_result))
+
+            if parse_errors:
+                for err in parse_errors:
+                    st.error(err)
+            elif not pending_pairs:
+                st.warning("No swimmers entered. Fill in at least one lane before recording.")
+            else:
+                projected_entries = entries + [pair[0] for pair in pending_pairs]
+                heat_athletes = sorted(
+                    {ath for pair in pending_pairs for ath in pair[0].athlete_ids}
+                )
+                violations: list[str] = []
+                for ath_id in heat_athletes:
+                    violations.extend(
+                        validate_athlete_entries(ath_id, projected_entries, EVENTS_BY_NUM)
+                    )
+
+                if violations and not override_limits:
+                    for msg in violations:
+                        st.warning(f"NFHS Rule 3-2-1 Violation: {msg}")
+                    st.error(
+                        "Heat blocked. Fix the lineup or check 'Override NFHS entry limit warnings' to save anyway."
+                    )
+                else:
+                    for ent, res in pending_pairs:
+                        save_entry_and_result(ent, res)
+                    st.rerun()
+
+
+# --- Event Results Table ---
+st.divider()
+st.subheader(
+    f"Official Results — Event {selected_event.event_number}: {gender_label} {selected_event.name}"
+)
+
+event_entries = {e.entry_id: e for e in entries if e.event_number == selected_event.event_number}
+event_results = [r for r in results if r.entry_id in event_entries]
+
+if not event_results:
+    st.info("No results recorded for this event yet.")
+else:
+    event_results.sort(key=lambda r: (r.place is None, r.place or 999))
+
+    rows = []
+    for res in event_results:
+        ent = event_entries[res.entry_id]
+        perf_display = (
+            f"{res.diving_score:.2f}"
+            if selected_event.event_type == EventType.DIVING and res.diving_score is not None
+            else (format_cs_to_time(res.official_time_cs) if res.official_time_cs is not None else "—")
+        )
+        participant_display = (
+            f"Relay {ent.relay_letter} ({', '.join(ent.athlete_ids)})"
+            if selected_event.event_type == EventType.RELAY and ent.relay_letter
+            else ", ".join(ent.athlete_ids)
+        )
+        if res.place is not None:
+            place_display = f"{res.place} (JD)" if res.manual_place is not None else str(res.place)
+        else:
+            place_display = "—"
+
+        rows.append(
+            {
+                "Place": place_display,
+                "Team": ent.team_id,
+                "Participant": participant_display,
+                "Official Time / Score": perf_display,
+                "Status": res.status.value,
+                "Exh": "Yes" if ent.is_exhibition else "",
+                "Points": f"{res.points:g}",
+            }
+        )
+
+    st.table(rows)
+
+    if st.button(f"Clear Event {selected_event.event_number} Results"):
+        clear_event(selected_event.event_number)
+        st.rerun()
