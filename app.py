@@ -1,3 +1,4 @@
+from collections import Counter
 import uuid
 import streamlit as st
 
@@ -644,6 +645,9 @@ with tab_scoring:
     else:
         event_results.sort(key=lambda r: (r.place is None, r.place or 999))
 
+        place_counts = Counter(r.place for r in event_results if r.place is not None)
+        tied_places = {p for p, count in place_counts.items() if count > 1}
+
         rows = []
         for res in event_results:
             ent = event_entries[res.entry_id]
@@ -662,8 +666,11 @@ with tab_scoring:
                 else ", ".join(ent.athlete_ids)
             )
             if res.place is not None:
+                tie_star = "*" if res.place in tied_places else ""
                 place_display = (
-                    f"{res.place} (JD)" if res.manual_place is not None else str(res.place)
+                    f"{res.place}{tie_star} (JD)"
+                    if res.manual_place is not None
+                    else f"{res.place}{tie_star}"
                 )
             else:
                 place_display = "—"
@@ -681,6 +688,13 @@ with tab_scoring:
             )
 
         st.table(rows)
+
+        if tied_places:
+            st.caption(
+                "*Note: Per MIAA / NFHS Swimming & Diving Rule 7-1 (Scoring), when competitors "
+                "tie for a scoring place, the points for the tied place and the next consecutive "
+                "place(s) are combined and divided equally among the tied competitors."
+            )
 
         # Shared dropdown labels for JD Override and Single-Result Delete
         result_options = {
