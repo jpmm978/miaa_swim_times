@@ -1,8 +1,65 @@
 from datetime import date
 import html
+from typing import Optional
 
 from models import Entry, Event, EventType, Result
 from timing import format_cs_to_time
+
+SIGNATURE_ROLES = [
+    ("referee", "Official 1 (Meet Referee) Signature & Date"),
+    ("starter", "Official 2 (Starter / Stroke & Turn) Signature & Date"),
+    ("home_coach", "Home Coach Signature & Date"),
+    ("visitor_coach", "Visitor Coach Signature & Date"),
+]
+
+
+def _render_signatures_section(signatures: Optional[dict[str, dict]]) -> str:
+    """Renders saved electronic signatures above signature lines, or the default 2-line block."""
+    sigs = signatures or {}
+    has_any_saved = any(
+        str((sigs.get(rk) or {}).get("signature_data_url") or "").strip().startswith("data:image/")
+        for rk, _ in SIGNATURE_ROLES
+    )
+
+    if not has_any_saved:
+        return """
+  <section class="signatures">
+    <div class="sig-line">Official 1 (Meet Referee) Signature &amp; Date</div>
+    <div class="sig-line">Official 2 (Starter / Stroke &amp; Turn) Signature &amp; Date</div>
+  </section>
+"""
+
+    cards: list[str] = []
+    for rk, label in SIGNATURE_ROLES:
+        rec = sigs.get(rk) or {}
+        data_url = str(rec.get("signature_data_url") or "").strip()
+        signer_name = str(rec.get("signer_name") or "").strip()
+        signed_at = str(rec.get("signed_at") or "").strip()
+
+        if data_url.startswith("data:image/"):
+            img_markup = (
+                f'<img src="{html.escape(data_url)}" alt="{html.escape(label)}" class="sig-img" />'
+            )
+            meta_parts = [p for p in (signer_name, signed_at) if p]
+            meta_suffix = f" ({html.escape(' · '.join(meta_parts))})" if meta_parts else ""
+        else:
+            img_markup = '<div class="sig-spacer"></div>'
+            meta_suffix = ""
+
+        cards.append(
+            f"""
+    <div class="sig-card">
+      {img_markup}
+      <div class="sig-line">{html.escape(label)}{meta_suffix}</div>
+    </div>
+            """
+        )
+
+    return f"""
+  <section class="signatures sig-grid-4">
+    {''.join(cards)}
+  </section>
+"""
 
 
 def export_meet_html(
@@ -14,6 +71,7 @@ def export_meet_html(
     results: list[Result],
     gender: str = "F",
     meet_date: date | None = None,
+    signatures: Optional[dict[str, dict]] = None,
 ) -> str:
     """Generates a single-page, print-ready HTML meet summary report for one division ('F' or 'M')."""
     date_display = (meet_date or date.today()).strftime("%B %d, %Y")
@@ -104,6 +162,7 @@ def export_meet_html(
         )
 
     events_markup = "\n".join(event_sections) or f"<p>No {div_label.lower()} event results recorded.</p>"
+    signatures_markup = _render_signatures_section(signatures)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -206,17 +265,35 @@ def export_meet_html(
       color: #555;
     }}
     .signatures {{
-      margin-top: 22px;
+      margin-top: 16px;
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 48px;
+      gap: 16px 36px;
       page-break-inside: avoid;
       break-inside: avoid;
     }}
+    .sig-grid-4 {{
+      gap: 12px 32px;
+    }}
+    .sig-card {{
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+    }}
+    .sig-img {{
+      max-height: 36px;
+      max-width: 190px;
+      object-fit: contain;
+      display: block;
+      margin-bottom: 2px;
+    }}
+    .sig-spacer {{
+      height: 32px;
+    }}
     .sig-line {{
       border-top: 1px solid #222;
-      padding-top: 4px;
-      font-size: 10px;
+      padding-top: 3px;
+      font-size: 9px;
       color: #333;
     }}
     @media print {{
@@ -246,11 +323,7 @@ def export_meet_html(
   </main>
 
   <div class="footnote">* Indicates Judge's Decision (JD) place override.</div>
-
-  <section class="signatures">
-    <div class="sig-line">Official 1 (Meet Referee) Signature &amp; Date</div>
-    <div class="sig-line">Official 2 (Starter / Stroke &amp; Turn) Signature &amp; Date</div>
-  </section>
+  {signatures_markup}
 </body>
 </html>
 """
