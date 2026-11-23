@@ -165,45 +165,105 @@ with st.sidebar:
             st.caption("No athletes recorded yet.")
 
     st.divider()
-    csv_data = export_meet_csv(STANDARD_EVENTS, entries, results)
-    st.download_button(
-        label="Export Results (CSV)",
-        data=csv_data,
-        file_name=f"meet_results_{team_a}_vs_{team_b}.csv".replace(" ", "_"),
-        mime="text/csv",
-        disabled=len(results) == 0,
-    )
+    st.subheader("Export Results")
 
-    sd3_data = export_meet_sd3(
-        meet_name=f"{team_a} vs {team_b}",
-        events=STANDARD_EVENTS,
-        entries=entries,
-        results=results,
-    )
-    st.download_button(
-        label="Export Hy-Tek (.sd3)",
-        data=sd3_data,
-        file_name=f"meet_results_{team_a}_vs_{team_b}.sd3".replace(" ", "_"),
-        mime="text/plain",
-        disabled=len(results) == 0,
-    )
+    def _division_slice(gender: str) -> tuple[list[Event], list[Entry], list[Result]]:
+        div_events = [e for e in STANDARD_EVENTS if e.gender == gender]
+        div_event_nums = {e.event_number for e in div_events}
+        div_entries = [e for e in entries if e.event_number in div_event_nums]
+        div_entry_ids = {e.entry_id for e in div_entries}
+        div_results = [r for r in results if r.entry_id in div_entry_ids]
+        return div_events, div_entries, div_results
 
-    html_report = export_meet_html(
-        team_a=team_a,
-        team_b=team_b,
-        div_totals=div_totals,
-        events=STANDARD_EVENTS,
-        entries=entries,
-        results=results,
-    )
-    st.download_button(
-        label="Export Printable Report (HTML)",
-        data=html_report,
-        file_name=f"meet_summary_{team_a}_vs_{team_b}.html".replace(" ", "_"),
+    g_events, g_entries, g_results = _division_slice("F")
+    b_events, b_entries, b_results = _division_slice("M")
+    safe_matchup = f"{team_a}_vs_{team_b}".replace(" ", "_")
+
+    # --- 1-Page Printable Reports (HTML) ---
+    st.caption("1-Page Official Report (HTML)")
+    h1, h2 = st.columns(2)
+    h1.download_button(
+        label="Girls HTML",
+        data=export_meet_html(
+            team_a=team_a,
+            team_b=team_b,
+            div_totals=div_totals,
+            events=STANDARD_EVENTS,
+            entries=entries,
+            results=results,
+            gender="F",
+        ),
+        file_name=f"girls_report_{safe_matchup}.html",
         mime="text/html",
-        disabled=len(results) == 0,
+        disabled=len(g_results) == 0,
+        use_container_width=True,
+    )
+    h2.download_button(
+        label="Boys HTML",
+        data=export_meet_html(
+            team_a=team_a,
+            team_b=team_b,
+            div_totals=div_totals,
+            events=STANDARD_EVENTS,
+            entries=entries,
+            results=results,
+            gender="M",
+        ),
+        file_name=f"boys_report_{safe_matchup}.html",
+        mime="text/html",
+        disabled=len(b_results) == 0,
+        use_container_width=True,
     )
 
+    # --- CSV Exports ---
+    st.caption("Results Spreadsheet (CSV)")
+    c1, c2 = st.columns(2)
+    c1.download_button(
+        label="Girls CSV",
+        data=export_meet_csv(g_events, g_entries, g_results),
+        file_name=f"girls_results_{safe_matchup}.csv",
+        mime="text/csv",
+        disabled=len(g_results) == 0,
+        use_container_width=True,
+    )
+    c2.download_button(
+        label="Boys CSV",
+        data=export_meet_csv(b_events, b_entries, b_results),
+        file_name=f"boys_results_{safe_matchup}.csv",
+        mime="text/csv",
+        disabled=len(b_results) == 0,
+        use_container_width=True,
+    )
+
+    # --- Hy-Tek (.sd3) Exports ---
+    st.caption("Hy-Tek Team Manager (.sd3)")
+    s1, s2 = st.columns(2)
+    s1.download_button(
+        label="Girls .sd3",
+        data=export_meet_sd3(
+            meet_name=f"{team_a} vs {team_b} (Girls)",
+            events=g_events,
+            entries=g_entries,
+            results=g_results,
+        ),
+        file_name=f"girls_results_{safe_matchup}.sd3",
+        mime="text/plain",
+        disabled=len(g_results) == 0,
+        use_container_width=True,
+    )
+    s2.download_button(
+        label="Boys .sd3",
+        data=export_meet_sd3(
+            meet_name=f"{team_a} vs {team_b} (Boys)",
+            events=b_events,
+            entries=b_entries,
+            results=b_results,
+        ),
+        file_name=f"boys_results_{safe_matchup}.sd3",
+        mime="text/plain",
+        disabled=len(b_results) == 0,
+        use_container_width=True,
+    )
     if st.button("Reset Entire Meet", type="secondary"):
         clear_all()
         st.rerun()
