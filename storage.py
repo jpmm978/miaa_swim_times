@@ -1,34 +1,79 @@
-def parse_roster_csv(file_bytes: bytes) -> list[tuple[str, str]]:
-    """Flexibly parses a roster CSV (with or without headers) into [(name, 'F'|'M'), ...]."""
-    try:
-        text = file_bytes.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = file_bytes.decode("latin-1")
+import csv
+import io
+import json
+import sqlite3
+from pathlib import Path
 
-    rows = list(csv.reader(io.StringIO(text)))
-    swimmers: list[tuple[str, str]] = []
+from models import Entry, Event, EventType, Result, ResultStatus
+from timing import format_cs_to_time
 
-    for idx, row in enumerate(rows):
-        cells = [c.strip() for c in row if c.strip()]
-        if len(cells) < 2:
-            continue
+DB_PATH = Path("swim_meet.db")
 
-        # Skip header row if present
-        if idx == 0 and cells[0].lower() in ("name", "swimmer", "athlete", "last", "last name"):
-            continue
 
-        # Last cell is gender; everything before it is the swimmer's name
-        raw_gender = cells[-1].upper()
-        name = " ".join(cells[:-1]).strip()
+def _get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-        if raw_gender.startswith(("F", "G")):
-            gender = "F"
-        elif raw_gender.startswith(("M", "B")):
-            gender = "M"
-        else:
-            continue
 
-        if name:
-            swimmers.append((name, gender))
+def init_db() -> None:
+    """Creates tables if they do not already exist."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS meet_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entries (
+                entry_id TEXT PRIMARY KEY,
+                event_number INTEGER NOT NULL,
+                team_id TEXT NOT NULL,
+                athlete_ids TEXT NOT NULL,
+                is_exhibition INTEGER NOT NULL,
+                relay_letter TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS results (
+                entry_id TEXT PRIMARY KEY,
+                pad_time_cs INTEGER,
+                backup_times_cs TEXT NOT NULL,
+                diving_score REAL,
+                status TEXT NOT NULL,
+                official_time_cs INTEGER,
+                FOREIGN KEY (entry_id) REFERENCES entries (entry_id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS roster (
+                team_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                gender TEXT NOT NULL,
+                PRIMARY KEY (team_id, name)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO meet_meta (key, value) VALUES ('team_a', 'Home Team')"
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO meet_meta (key, value) VALUES ('team_b', 'Visiting Team')"
+        )
 
-    return swimmers
+
+def load_team_names() -> tuple[str, str]:
+    with _get_conn() as conn:
+        rows = dict(conn.execute("SELECT key, value FROM meet_meta").fetchall())
+    return rows.get("team_a", "Home Team"), rows.get("team_b", "Visiting Team")
+
+
+def save_team_names(team_
