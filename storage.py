@@ -105,6 +105,18 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS meet_signatures (
+                meet_id TEXT NOT NULL,
+                role_key TEXT NOT NULL,
+                signer_name TEXT NOT NULL DEFAULT '',
+                signature_data_url TEXT NOT NULL,
+                signed_at TEXT NOT NULL,
+                PRIMARY KEY (meet_id, role_key)
+            )
+            """
+        )
 
         _ensure_column(conn, "results", "watch_time_cs", "INTEGER")
         _ensure_column(conn, "results", "backup_times_cs", "TEXT NOT NULL DEFAULT '[]'")
@@ -171,6 +183,48 @@ def init_db() -> None:
             conn.execute(
                 "INSERT OR REPLACE INTO meet_meta (key, value) VALUES ('active_meet_id', 'default_meet')"
             )
+
+
+def save_meet_signature(
+    meet_id: str,
+    role_key: str,
+    signer_name: str,
+    signature_data_url: str,
+) -> None:
+    """Saves or updates an electronic signature (PNG data URL) for a meet role."""
+    signed_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO meet_signatures (
+                meet_id, role_key, signer_name, signature_data_url, signed_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (meet_id, role_key, signer_name.strip(), signature_data_url.strip(), signed_at),
+        )
+
+
+def load_meet_signatures(meet_id: str) -> dict[str, dict]:
+    """Returns saved signatures keyed by role_key."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT role_key, signer_name, signature_data_url, signed_at
+            FROM meet_signatures
+            WHERE meet_id = ?
+            """,
+            (meet_id,),
+        ).fetchall()
+    return {r["role_key"]: dict(r) for r in rows}
+
+
+def delete_meet_signature(meet_id: str, role_key: str) -> None:
+    with _get_conn() as conn:
+        conn.execute(
+            "DELETE FROM meet_signatures WHERE meet_id = ? AND role_key = ?",
+            (meet_id, role_key),
+        )
 
 
 def list_meets() -> list[dict]:
@@ -297,7 +351,7 @@ def rename_meet(meet_id: str, new_title: str) -> None:
 
 
 def delete_meet(meet_id: str) -> None:
-    """Deletes a saved meet and its entries, results, and lineups; ensures an active meet remains."""
+    """Deletes a saved meet and its entries, results, lineups, and signatures."""
     now_iso = datetime.now().strftime("%Y-%m-%d %H:%M")
     with _get_conn() as conn:
         conn.execute(
@@ -306,6 +360,7 @@ def delete_meet(meet_id: str) -> None:
         )
         conn.execute("DELETE FROM entries WHERE meet_id = ?", (meet_id,))
         conn.execute("DELETE FROM lineups WHERE meet_id = ?", (meet_id,))
+        conn.execute("DELETE FROM meet_signatures WHERE meet_id = ?", (meet_id,))
         conn.execute("DELETE FROM meets WHERE meet_id = ?", (meet_id,))
 
         remaining = conn.execute(
