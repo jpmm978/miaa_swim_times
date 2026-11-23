@@ -43,6 +43,58 @@ def _performance_key(result: Result, event_type: EventType) -> Optional[float]:
     return result.official_time_cs
 
 
+def _rank_into_groups(
+    eligible: list[tuple[Entry, Result]],
+    event_type: EventType,
+) -> list[list[tuple[Entry, Result]]]:
+    """
+    Orders eligible (Entry, Result) pairs into finish groups (supporting ties).
+    Results with a valid `manual_place` (Judge's Decision) are pinned to their
+    official slot; remaining results fill open slots by performance.
+    """
+    is_diving = event_type == EventType.DIVING
+    pinned_by_place: dict[int, list[tuple[Entry, Result]]] = defaultdict(list)
+    unpinned: list[tuple[Entry, Result]] = []
+
+    for entry, res in eligible:
+        if res.manual_place is not None and res.manual_place >= 1:
+            pinned_by_place[res.manual_place].append((entry, res))
+        else:
+            unpinned.append((entry, res))
+
+    # Sort unpinned entries by performance and group exact ties
+    unpinned.sort(
+        key=lambda pair: _performance_key(pair[1], event_type),  # type: ignore[arg-type]
+        reverse=is_diving,
+    )
+    unpinned_groups: list[list[tuple[Entry, Result]]] = [
+        list(group_iter)
+        for _, group_iter in groupby(
+            unpinned, key=lambda pair: _performance_key(pair[1], event_type)
+        )
+    ]
+
+    # Merge pinned slots and unpinned groups in finish order
+    ranked_groups: list[list[tuple[Entry, Result]]] = []
+    current_slot = 1
+
+    while pinned_by_place or unpinned_groups:
+        due_pinned = [p for p in pinned_by_place if p <= current_slot]
+        if due_pinned:
+            p = min(due_pinned)
+            group = pinned_by_place.pop(p)
+        elif unpinned_groups:
+            group = unpinned_groups.pop(0)
+        else:
+            p = min(pinned_by_place)
+            group = pinned_by_place.pop(p)
+
+        ranked_groups.append(group)
+        current_slot += len(group)
+
+    return ranked_groups
+
+
 def score_event(
     event: Event,
     entries: list[Entry],
@@ -51,7 +103,8 @@ def score_event(
     team_filter: Optional[set[str]] = None,
 ) -> dict[str, float]:
     """
-    Scores a single event according to MIAA/NFHS rules.
+    Scores a single event according to MIAA/NFHS rules, honoring official
+    manual_place (Judge's Decision) overrides when present.
 
     - Updates `place` and `points` on each Result object in place.
     - Returns a dict mapping `team_id` -> total points earned in this event.
@@ -60,7 +113,6 @@ def score_event(
     """
     config = SCORING_CONFIGS[meet_format]
     is_relay = event.event_type == EventType.RELAY
-    is_diving = event.event_type == EventType.DIVING
 
     points_table = config.relay_points if is_relay else config.individual_points
     max_per_team = (
@@ -85,34 +137,32 @@ def score_event(
             continue
         if res.status != ResultStatus.OK or entry.is_exhibition:
             continue
-        if _performance_key(res, event.event_type) is None:
+        if _performance_key(res, event.event_type) is None and res.manual_place is None:
             continue
 
         eligible.append((entry, res))
 
-    # 2. Sort by performance (ascending time for swim, descending score for diving)
-    eligible.sort(
-        key=lambda pair: _performance_key(pair[1], event.event_type),  # type: ignore[arg-type]
-        reverse=is_diving,
-    )
+    # 2. Rank into finish groups (honoring manual_place overrides and time/score ties)
+    ranked_groups = _rank_into_groups(eligible, event.event_type)
 
     # 3. Enforce per-team scoring caps (e.g., max 2 relays per team in a dual meet)
     team_counts: dict[str, int] = defaultdict(int)
-    scoring_pool: list[tuple[Entry, Result]] = []
+    scoring_groups: list[list[tuple[Entry, Result]]] = []
 
-    for entry, res in eligible:
-        if team_counts[entry.team_id] < max_per_team:
-            scoring_pool.append((entry, res))
-            team_counts[entry.team_id] += 1
+    for group in ranked_groups:
+        kept: list[tuple[Entry, Result]] = []
+        for entry, res in group:
+            if team_counts[entry.team_id] < max_per_team:
+                kept.append((entry, res))
+                team_counts[entry.team_id] += 1
+        if kept:
+            scoring_groups.append(kept)
 
     # 4. Assign places and split points for ties
     team_scores: dict[str, float] = defaultdict(float)
     current_idx = 0  # 0-based index into points_table
 
-    for _, tied_group_iter in groupby(
-        scoring_pool, key=lambda pair: _performance_key(pair[1], event.event_type)
-    ):
-        tied_group = list(tied_group_iter)
+    for tied_group in scoring_groups:
         k = len(tied_group)
         place = current_idx + 1
 
