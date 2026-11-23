@@ -21,6 +21,7 @@ except ImportError:
 from scoring import MeetFormat, score_event
 from sdif_export import export_meet_sd3
 from storage import (
+    add_roster_swimmer,
     clear_all,
     clear_event,
     clear_lineups,
@@ -712,7 +713,8 @@ with st.sidebar:
         count_a = len(rosters.get((team_a, "F"), [])) + len(rosters.get((team_a, "M"), []))
         count_b = len(rosters.get((team_b, "F"), [])) + len(rosters.get((team_b, "M"), []))
         st.caption(f"Saved: {team_a} ({count_a}) | {team_b} ({count_b})")
-st.divider()
+
+        st.divider()
         st.caption("Add Missing Swimmer to Saved Roster")
         with st.form("quick_add_swimmer_form", clear_on_submit=True):
             qa_team = st.selectbox("Team", [team_a, team_b], key="qa_swimmer_team")
@@ -725,6 +727,7 @@ st.divider()
                     st.rerun()
                 else:
                     st.error(msg)
+
     st.divider()
     st.header("Live Meet Scores")
     div_totals = compute_division_totals(team_a, team_b)
@@ -1689,7 +1692,7 @@ with tab_lineup:
                                 options=lane_roster,
                                 default=[n for n in saved_names if n in lane_roster],
                                 max_selections=4,
-                                placeholder="Select 4 relay swimmers...",
+                                placeholder="Select 4 swimmers...",
                                 key=f"lu_ev{ev.event_number}_l{lane}_names",
                                 label_visibility="collapsed",
                             )
