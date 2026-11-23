@@ -106,7 +106,6 @@ def init_db() -> None:
             """
         )
 
-        # Safe migrations for older SQLite databases
         _ensure_column(conn, "results", "watch_time_cs", "INTEGER")
         _ensure_column(conn, "results", "backup_times_cs", "TEXT NOT NULL DEFAULT '[]'")
         _ensure_column(conn, "results", "diving_score", "REAL")
@@ -116,7 +115,6 @@ def init_db() -> None:
         _ensure_column(conn, "results", "override_note", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "entries", "meet_id", "TEXT NOT NULL DEFAULT 'default_meet'")
 
-        # Migrate pre-existing lineups table if its primary key was only (event_number, lane)
         lineup_cols = {
             row["name"] for row in conn.execute("PRAGMA table_info(lineups)").fetchall()
         }
@@ -430,6 +428,48 @@ def save_entry_and_result(entry: Entry, result: Result, meet_id: Optional[str] =
                 result.official_time_cs,
                 result.manual_place,
                 result.override_note,
+            ),
+        )
+
+
+def update_entry_and_result(entry: Entry, result: Result) -> None:
+    """Updates an existing entry and its result in place without changing entry_id or meet_id."""
+    with _get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE entries
+            SET team_id = ?, athlete_ids = ?, is_exhibition = ?, relay_letter = ?
+            WHERE entry_id = ?
+            """,
+            (
+                entry.team_id,
+                json.dumps(entry.athlete_ids),
+                int(entry.is_exhibition),
+                entry.relay_letter,
+                entry.entry_id,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE results
+            SET watch_time_cs = ?,
+                backup_times_cs = ?,
+                diving_score = ?,
+                status = ?,
+                official_time_cs = ?,
+                manual_place = ?,
+                override_note = ?
+            WHERE entry_id = ?
+            """,
+            (
+                result.watch_time_cs,
+                json.dumps(result.backup_times_cs),
+                result.diving_score,
+                result.status.value,
+                result.official_time_cs,
+                result.manual_place,
+                result.override_note,
+                result.entry_id,
             ),
         )
 
