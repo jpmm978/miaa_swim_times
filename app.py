@@ -1635,9 +1635,19 @@ with tab_lineup:
         "Saved lineups pre-fill Event Scoring and print on Heat Sheets and Lane Timer Sheets."
     )
 
-    lu_filter_col, lu_heat_col, lu_timer_col, lu_pair_col = st.columns([1.8, 1.2, 1.3, 1.4])
-    lineup_div = lu_filter_col.radio(
-        "Show Division", ["All", "Girls", "Boys"], horizontal=True, key="lineup_div_filter"
+    st.markdown("### Printable Reports & Timer Sheets")
+
+    heat_sheet_html = export_heat_sheet_html(
+        team_a=team_a,
+        team_b=team_b,
+        events=STANDARD_EVENTS,
+        lineups=lineups,
+    )
+    timer_sheets_html = export_lane_timer_sheets_html(
+        team_a=team_a,
+        team_b=team_b,
+        events=STANDARD_EVENTS,
+        lineups=lineups,
     )
 
     opt_col1, opt_col2 = st.columns(2)
@@ -1652,35 +1662,6 @@ with tab_lineup:
         key="only_populated_lane_pair_sheets",
     )
 
-    heat_sheet_html = export_heat_sheet_html(
-        team_a=team_a,
-        team_b=team_b,
-        events=STANDARD_EVENTS,
-        lineups=lineups,
-    )
-    lu_heat_col.download_button(
-        label="Export Heat Sheet (HTML)",
-        data=heat_sheet_html,
-        file_name=f"heat_sheet_{team_a}_vs_{team_b}.html".replace(" ", "_"),
-        mime="text/html",
-        disabled=len(lineups) == 0,
-        use_container_width=True,
-    )
-
-    timer_sheets_html = export_lane_timer_sheets_html(
-        team_a=team_a,
-        team_b=team_b,
-        events=STANDARD_EVENTS,
-        lineups=lineups,
-    )
-    lu_timer_col.download_button(
-        label="Lane Timer Sheets (HTML)",
-        data=timer_sheets_html,
-        file_name=f"lane_timer_sheets_{team_a}_vs_{team_b}.html".replace(" ", "_"),
-        mime="text/html",
-        use_container_width=True,
-    )
-
     pair_timer_sheets_html = export_event_pair_timer_sheets_html(
         team_a=team_a,
         team_b=team_b,
@@ -1690,14 +1671,6 @@ with tab_lineup:
         entries=entries,
         results=results,
     )
-    lu_pair_col.download_button(
-        label="Event Timer Cards (G/B)",
-        data=pair_timer_sheets_html,
-        file_name=f"event_timer_cards_{team_a}_vs_{team_b}.html".replace(" ", "_"),
-        mime="text/html",
-        use_container_width=True,
-    )
-
     lane_pair_sheets_html = export_lane_event_pair_sheets_html(
         team_a=team_a,
         team_b=team_b,
@@ -1707,12 +1680,43 @@ with tab_lineup:
         entries=entries,
         results=results,
     )
-    st.download_button(
+
+    rep_c1, rep_c2, rep_c3, rep_c4 = st.columns(4)
+    rep_c1.download_button(
+        label="Export Heat Sheet (HTML)",
+        data=heat_sheet_html,
+        file_name=f"heat_sheet_{team_a}_vs_{team_b}.html".replace(" ", "_"),
+        mime="text/html",
+        disabled=len(lineups) == 0,
+        use_container_width=True,
+    )
+    rep_c2.download_button(
+        label="Lane Timer Sheets (HTML)",
+        data=timer_sheets_html,
+        file_name=f"lane_timer_sheets_{team_a}_vs_{team_b}.html".replace(" ", "_"),
+        mime="text/html",
+        use_container_width=True,
+    )
+    rep_c3.download_button(
+        label="Event Timer Cards (G/B)",
+        data=pair_timer_sheets_html,
+        file_name=f"event_timer_cards_{team_a}_vs_{team_b}.html".replace(" ", "_"),
+        mime="text/html",
+        use_container_width=True,
+    )
+    rep_c4.download_button(
         label="Lane Event-Pair Sheets (1 Page/Lane, Ev 1–24)",
         data=lane_pair_sheets_html,
         file_name=f"lane_event_pair_sheets_{team_a}_vs_{team_b}.html".replace(" ", "_"),
         mime="text/html",
         use_container_width=True,
+    )
+
+    st.divider()
+    st.markdown("### Lineup & Heat Seeding")
+
+    lineup_div = st.radio(
+        "Show Division", ["All", "Girls", "Boys"], horizontal=True, key="lineup_div_filter"
     )
 
     lineup_events = [
