@@ -573,7 +573,7 @@ with tab_scoring:
                         continue  # Skip empty lane
 
                     try:
-                        pad_cs = parse_time_to_cs(row["watch"]) if row["watch"].strip() else None
+                        watch_cs = parse_time_to_cs(row["watch"]) if row["watch"].strip() else None
                         backups_cs = [
                             parse_time_to_cs(t) for t in row["backups"].split(",") if t.strip()
                         ]
@@ -733,7 +733,7 @@ with tab_scoring:
                 new_note = e2.text_input(
                     "Official Note (optional)",
                     value=current_res.override_note,
-                    placeholder="e.g., Pad malfunction - visual 1st",
+                    placeholder="e.g., Watch malfunction - visual 1st",
                 )
 
                 if st.form_submit_button("Save JD Override", type="primary"):
