@@ -43,7 +43,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS results (
                 entry_id TEXT PRIMARY KEY,
-                pad_time_cs INTEGER,
+                watch_time_cs INTEGER,
                 backup_times_cs TEXT NOT NULL,
                 diving_score REAL,
                 status TEXT NOT NULL,
@@ -137,14 +137,14 @@ def save_entry_and_result(entry: Entry, result: Result) -> None:
         conn.execute(
             """
             INSERT INTO results (
-                entry_id, pad_time_cs, backup_times_cs, diving_score,
+                entry_id, watch_time_cs, backup_times_cs, diving_score,
                 status, official_time_cs, manual_place, override_note
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result.entry_id,
-                result.pad_time_cs,
+                result.watch_time_cs,
                 json.dumps(result.backup_times_cs),
                 result.diving_score,
                 result.status.value,
@@ -198,7 +198,7 @@ def load_all_data() -> tuple[list[Entry], list[Result]]:
     results = [
         Result(
             entry_id=r["entry_id"],
-            pad_time_cs=r["pad_time_cs"],
+            watch_time_cs=r["watch_time_cs"],
             backup_times_cs=json.loads(r["backup_times_cs"]),
             diving_score=r["diving_score"],
             status=ResultStatus(r["status"]),
