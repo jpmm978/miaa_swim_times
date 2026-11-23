@@ -13,6 +13,26 @@ SIGNATURE_ROLES = [
 ]
 
 
+def _normalize_lineup_lookup(
+    lineups: dict,
+) -> dict[tuple[int, int, int], dict]:
+    """Normalizes lineups keyed by either (ev, lane) or (ev, heat, lane) into (ev, heat, lane)."""
+    normalized: dict[tuple[int, int, int], dict] = {}
+    for key, val in lineups.items():
+        if len(key) == 3:
+            ev_num, heat_num, lane = int(key[0]), int(key[1]), int(key[2])
+        else:
+            ev_num, lane = int(key[0]), int(key[1])
+            heat_num = int(val.get("heat_number") or 1)
+        normalized[(ev_num, heat_num, lane)] = {
+            **val,
+            "event_number": ev_num,
+            "heat_number": heat_num,
+            "lane": lane,
+        }
+    return normalized
+
+
 def _render_signatures_section(signatures: Optional[dict[str, dict]]) -> str:
     """Renders saved electronic signatures above signature lines, or the default 2-line block."""
     sigs = signatures or {}
@@ -96,11 +116,20 @@ def export_meet_html(
         if not ev_results:
             continue
 
-        ev_results.sort(key=lambda r: (r.place is None, r.place or 999))
+        ev_results.sort(
+            key=lambda r: (
+                getattr(entries_by_id[r.entry_id], "heat_number", 1),
+                r.place is None,
+                r.place or 999,
+            )
+        )
 
         row_html: list[str] = []
         for res in ev_results:
             ent = entries_by_id[res.entry_id]
+            heat_num = getattr(ent, "heat_number", 1)
+            is_exh = bool(ent.is_exhibition) or (heat_num > 1)
+
             if ev.event_type == EventType.DIVING:
                 perf = f"{res.diving_score:.2f}" if res.diving_score is not None else "—"
             else:
@@ -117,9 +146,11 @@ def export_meet_html(
                 place_str = "—"
 
             notes: list[str] = []
+            if heat_num > 1:
+                notes.append(f"H{heat_num}")
             if res.status.value != "OK":
                 notes.append(res.status.value)
-            if ent.is_exhibition:
+            if is_exh:
                 notes.append("EXH")
             if res.manual_place is not None:
                 notes.append("JD")
@@ -333,79 +364,88 @@ def export_heat_sheet_html(
     team_a: str,
     team_b: str,
     events: list[Event],
-    lineups: dict[tuple[int, int], dict],
+    lineups: dict,
     meet_date: date | None = None,
 ) -> str:
-    """Generates a self-contained, print-ready HTML heat sheet from saved lineups."""
+    """Generates a self-contained, print-ready HTML heat sheet supporting multiple heats per event."""
     date_display = (meet_date or date.today()).strftime("%B %d, %Y")
     esc_a = html.escape(team_a)
     esc_b = html.escape(team_b)
+    norm_lineups = _normalize_lineup_lookup(lineups)
 
     event_sections: list[str] = []
     for ev in events:
         if ev.event_type == EventType.DIVING:
             continue
 
-        ev_lanes = {
-            lane: lineups[(ev.event_number, lane)]
-            for lane in range(1, 7)
-            if (ev.event_number, lane) in lineups
-            and lineups[(ev.event_number, lane)].get("athlete_ids")
-        }
-        if not ev_lanes:
+        ev_heats = sorted(
+            {
+                heat_num
+                for (ev_num, heat_num, _lane), data in norm_lineups.items()
+                if ev_num == ev.event_number and data.get("athlete_ids")
+            }
+        )
+        if not ev_heats:
             continue
 
         gender_label = "Girls" if ev.gender == "F" else "Boys"
-        row_html: list[str] = []
 
-        for lane in range(1, 7):
-            data = ev_lanes.get(lane)
-            if data:
-                team_str = html.escape(data["team_id"])
-                athlete_ids = data["athlete_ids"]
-                relay_letter = data.get("relay_letter")
-                if ev.event_type == EventType.RELAY and relay_letter:
-                    participant = f"Relay {relay_letter} ({', '.join(athlete_ids)})"
-                else:
-                    participant = ", ".join(athlete_ids)
-                participant_str = html.escape(participant)
-                exh_str = "EXH" if data.get("is_exhibition") else ""
-            else:
-                team_str = "—"
-                participant_str = "—"
-                exh_str = ""
-
-            row_html.append(
-                f"<tr>"
-                f"<td class='center'><strong>{lane}</strong></td>"
-                f"<td>{team_str}</td>"
-                f"<td>{participant_str}</td>"
-                f"<td class='center'>{exh_str}</td>"
-                f"<td class='write-in'></td>"
-                f"</tr>"
+        for heat_num in ev_heats:
+            heat_tag = (
+                f"Heat {heat_num} of {len(ev_heats)} (Scoring)"
+                if heat_num == 1
+                else f"Heat {heat_num} of {len(ev_heats)} (Exhibition)"
             )
+            row_html: list[str] = []
 
-        event_sections.append(
-            f"""
-            <section class="event-block">
-              <h3>Event {ev.event_number}: {gender_label} {html.escape(ev.name)}</h3>
-              <table>
-                <thead>
-                  <tr>
-                    <th class="center" style="width: 8%;">Lane</th>
-                    <th style="width: 22%;">Team</th>
-                    <th style="width: 44%;">Swimmer(s)</th>
-                    <th class="center" style="width: 8%;">Note</th>
-                    <th style="width: 18%;">Time / Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {''.join(row_html)}
-                </tbody>
-              </table>
-            </section>
-            """
-        )
+            for lane in range(1, 7):
+                data = norm_lineups.get((ev.event_number, heat_num, lane))
+                if data and data.get("athlete_ids"):
+                    team_str = html.escape(data["team_id"])
+                    athlete_ids = data["athlete_ids"]
+                    relay_letter = data.get("relay_letter")
+                    if ev.event_type == EventType.RELAY and relay_letter:
+                        participant = f"Relay {relay_letter} ({', '.join(athlete_ids)})"
+                    else:
+                        participant = ", ".join(athlete_ids)
+                    participant_str = html.escape(participant)
+                    exh_str = "EXH" if (data.get("is_exhibition") or heat_num > 1) else ""
+                else:
+                    team_str = "—"
+                    participant_str = "—"
+                    exh_str = ""
+
+                row_html.append(
+                    f"<tr>"
+                    f"<td class='center'><strong>{lane}</strong></td>"
+                    f"<td>{team_str}</td>"
+                    f"<td>{participant_str}</td>"
+                    f"<td class='center'>{exh_str}</td>"
+                    f"<td class='write-in'></td>"
+                    f"</tr>"
+                )
+
+            event_sections.append(
+                f"""
+                <section class="event-block">
+                  <h3>Event {ev.event_number}: {gender_label} {html.escape(ev.name)} — {html.escape(heat_tag)}</h3>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th class="center" style="width: 8%;">Lane</th>
+                        <th style="width: 22%;">Team</th>
+                        <th style="width: 44%;">Swimmer(s)</th>
+                        <th class="center" style="width: 8%;">Note</th>
+                        <th style="width: 18%;">Time / Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {''.join(row_html)}
+                    </tbody>
+                  </table>
+                </section>
+                """
+            )
 
     events_markup = "\n".join(event_sections) or "<p>No lineups saved yet.</p>"
 
@@ -494,13 +534,14 @@ def export_lane_timer_sheets_html(
     team_a: str,
     team_b: str,
     events: list[Event],
-    lineups: dict[tuple[int, int], dict],
+    lineups: dict,
     meet_date: date | None = None,
 ) -> str:
-    """Generates a 6-page print-ready HTML packet (one 24-event timer sheet per lane)."""
+    """Generates a 6-page print-ready HTML packet (one timer sheet per lane, with rows for every heat)."""
     date_display = (meet_date or date.today()).strftime("%B %d, %Y")
     esc_a = html.escape(team_a)
     esc_b = html.escape(team_b)
+    norm_lineups = _normalize_lineup_lookup(lineups)
 
     lane_pages: list[str] = []
     for lane in range(1, 7):
@@ -515,37 +556,50 @@ def export_lane_timer_sheets_html(
                 row_html.append(
                     f"<tr class='diving-row'>"
                     f"<td class='center'><strong>{ev.event_number}</strong></td>"
+                    f"<td class='center'>—</td>"
                     f"<td>{ev_label}</td>"
                     f"<td colspan='5' class='center'><em>Diving Break — No Lane Timing</em></td>"
                     f"</tr>"
                 )
                 continue
 
-            data = lineups.get((ev.event_number, lane))
-            if data and data.get("athlete_ids"):
-                athlete_ids = data["athlete_ids"]
-                relay_letter = data.get("relay_letter")
-                if ev.event_type == EventType.RELAY and relay_letter:
-                    participant = f"Relay {relay_letter}: {', '.join(athlete_ids)}"
-                else:
-                    participant = ", ".join(athlete_ids)
-                swimmer_str = html.escape(participant)
-                note_str = "EXH" if data.get("is_exhibition") else ""
-            else:
-                swimmer_str = ""
-                note_str = ""
-
-            row_html.append(
-                f"<tr>"
-                f"<td class='center'><strong>{ev.event_number}</strong></td>"
-                f"<td>{ev_label}</td>"
-                f"<td class='swimmer'>{swimmer_str}</td>"
-                f"<td class='watch'></td>"
-                f"<td class='watch'></td>"
-                f"<td class='watch'></td>"
-                f"<td class='center note'>{note_str}</td>"
-                f"</tr>"
+            ev_heats = sorted(
+                {
+                    heat_num
+                    for (ev_num, heat_num, _l), data in norm_lineups.items()
+                    if ev_num == ev.event_number and data.get("athlete_ids")
+                }
             )
+            if not ev_heats:
+                ev_heats = [1]
+
+            for heat_num in ev_heats:
+                data = norm_lineups.get((ev.event_number, heat_num, lane))
+                if data and data.get("athlete_ids"):
+                    athlete_ids = data["athlete_ids"]
+                    relay_letter = data.get("relay_letter")
+                    if ev.event_type == EventType.RELAY and relay_letter:
+                        participant = f"Relay {relay_letter}: {', '.join(athlete_ids)}"
+                    else:
+                        participant = ", ".join(athlete_ids)
+                    swimmer_str = html.escape(participant)
+                    note_str = "EXH" if (data.get("is_exhibition") or heat_num > 1) else ""
+                else:
+                    swimmer_str = ""
+                    note_str = "EXH" if heat_num > 1 else ""
+
+                row_html.append(
+                    f"<tr>"
+                    f"<td class='center'><strong>{ev.event_number}</strong></td>"
+                    f"<td class='center'>H{heat_num}</td>"
+                    f"<td>{ev_label}</td>"
+                    f"<td class='swimmer'>{swimmer_str}</td>"
+                    f"<td class='watch'></td>"
+                    f"<td class='watch'></td>"
+                    f"<td class='watch'></td>"
+                    f"<td class='center note'>{note_str}</td>"
+                    f"</tr>"
+                )
 
         page_class = "lane-page" if lane < 6 else "lane-page last-page"
         lane_pages.append(
@@ -565,12 +619,13 @@ def export_lane_timer_sheets_html(
                 <thead>
                   <tr>
                     <th class="center" style="width: 5%;">Ev</th>
-                    <th style="width: 24%;">Event</th>
-                    <th style="width: 32%;">Swimmer / Relay</th>
-                    <th class="center" style="width: 11%;">Watch 1</th>
-                    <th class="center" style="width: 11%;">Watch 2</th>
-                    <th class="center" style="width: 11%;">Watch 3</th>
-                    <th class="center" style="width: 6%;">Note</th>
+                    <th class="center" style="width: 5%;">Ht</th>
+                    <th style="width: 23%;">Event</th>
+                    <th style="width: 30%;">Swimmer / Relay</th>
+                    <th class="center" style="width: 10%;">Watch 1</th>
+                    <th class="center" style="width: 10%;">Watch 2</th>
+                    <th class="center" style="width: 10%;">Watch 3</th>
+                    <th class="center" style="width: 7%;">Note</th>
                   </tr>
                 </thead>
                 <tbody>
