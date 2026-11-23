@@ -900,7 +900,29 @@ def save_roster(team_id: str, swimmers: list[tuple[str, str]]) -> None:
             "INSERT OR REPLACE INTO roster (team_id, name, gender) VALUES (?, ?, ?)",
             [(team_id, name, gender) for name, gender in swimmers],
         )
+def add_roster_swimmer(team_id: str, name: str, gender: str) -> tuple[bool, str]:
+    """Adds or updates a single swimmer on a team's saved roster."""
+    clean_team = team_id.strip()
+    clean_name = name.strip()
+    raw_g = gender.strip().upper()
 
+    if not clean_team:
+        return False, "Team name is missing."
+    if not clean_name:
+        return False, "Please enter a swimmer name."
+    if raw_g.startswith(("F", "G")):
+        clean_gender = "F"
+    elif raw_g.startswith(("M", "B")):
+        clean_gender = "M"
+    else:
+        return False, "Gender must be F or M."
+
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO roster (team_id, name, gender) VALUES (?, ?, ?)",
+            (clean_team, clean_name, clean_gender),
+        )
+    return True, f"Added {clean_name} ({clean_gender}) to {clean_team}."
 
 def load_rosters() -> dict[tuple[str, str], list[str]]:
     """Returns a lookup dict mapping (team_id, gender) -> sorted list of swimmer names."""
