@@ -33,6 +33,30 @@ def _normalize_lineup_lookup(
     return normalized
 
 
+def _event_has_lineup_or_result(
+    event_number: int,
+    norm_lineups: dict[tuple[int, int, int], dict],
+    entries: Optional[list[Entry]] = None,
+    results: Optional[list[Result]] = None,
+) -> bool:
+    """Returns True if an event has at least one seeded swimmer/relay or recorded entry/result."""
+    has_lineup = any(
+        ev_num == event_number and bool(data.get("athlete_ids"))
+        for (ev_num, _heat_num, _lane), data in norm_lineups.items()
+    )
+    if has_lineup:
+        return True
+
+    ev_entry_ids = {
+        e.entry_id for e in (entries or []) if e.event_number == event_number
+    }
+    if ev_entry_ids:
+        return True
+
+    res_entry_ids = {r.entry_id for r in (results or [])}
+    return bool(ev_entry_ids & res_entry_ids)
+
+
 def _render_signatures_section(signatures: Optional[dict[str, dict]]) -> str:
     """Renders saved electronic signatures above signature lines, or the default 2-line block."""
     sigs = signatures or {}
@@ -761,8 +785,15 @@ def export_event_pair_timer_sheets_html(
     events: list[Event],
     lineups: dict,
     meet_date: date | None = None,
+    only_populated: bool = False,
+    entries: Optional[list[Entry]] = None,
+    results: Optional[list[Result]] = None,
 ) -> str:
-    """Generates a 12-page print-ready HTML packet pairing Girls & Boys events (Ev 1&2, 3&4, ..., 23&24) per page."""
+    """Generates a print-ready HTML packet pairing Girls & Boys events per page.
+
+    When `only_populated=True`, skips empty events that have no saved lineups,
+    entries, or results, and omits pages with no active events.
+    """
     date_display = (meet_date or date.today()).strftime("%B %d, %Y")
     esc_a = html.escape(team_a)
     esc_b = html.escape(team_b)
@@ -771,15 +802,24 @@ def export_event_pair_timer_sheets_html(
     event_pairs = [events[i : i + 2] for i in range(0, len(events), 2)]
     pages_html: list[str] = []
 
-    for pair_idx, pair in enumerate(event_pairs):
+    for pair in event_pairs:
+        active_pair = [
+            ev
+            for ev in pair
+            if not only_populated
+            or _event_has_lineup_or_result(ev.event_number, norm_lineups, entries, results)
+        ]
+        if not active_pair:
+            continue
+
         pair_title = " &amp; ".join(
             f"Ev {ev.event_number} ({'Girls' if ev.gender == 'F' else 'Boys'})"
-            for ev in pair
+            for ev in active_pair
         )
-        base_name = html.escape(pair[0].name)
+        base_name = html.escape(active_pair[0].name)
         blocks_html: list[str] = []
 
-        for ev in pair:
+        for ev in active_pair:
             g_label = "Girls" if ev.gender == "F" else "Boys"
             ev_heading = f"Event {ev.event_number}: {g_label} {html.escape(ev.name)}"
 
@@ -888,10 +928,9 @@ def export_event_pair_timer_sheets_html(
                     """
                 )
 
-        page_cls = "pair-page" if pair_idx < len(event_pairs) - 1 else "pair-page last-page"
         pages_html.append(
             f"""
-            <section class="{page_cls}">
+            <section class="pair-page">
               <header>
                 <div>
                   <h1>EVENT TIMER CARD — {base_name}</h1>
@@ -903,6 +942,17 @@ def export_event_pair_timer_sheets_html(
             </section>
             """
         )
+
+    if pages_html:
+        pages_html[-1] = pages_html[-1].replace(
+            '<section class="pair-page">', '<section class="pair-page last-page">', 1
+        )
+
+    body_content = (
+        "".join(pages_html)
+        if pages_html
+        else "<p>No events with saved lineups or recorded results found.</p>"
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1014,7 +1064,7 @@ def export_event_pair_timer_sheets_html(
   </style>
 </head>
 <body>
-  {''.join(pages_html)}
+  {body_content}
 </body>
 </html>
 """
