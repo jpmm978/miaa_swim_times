@@ -278,8 +278,7 @@ tab_scoring, tab_lineup = st.tabs(["Event Scoring", "Batch Lineup & Seeding"])
 # TAB 1: EVENT SCORING
 # ==============================================================================
 with tab_scoring:
-    filter_col, event_col = st.columns([1, 3])
-    division_filter = filter_col.radio("Division Filter", ["All", "Girls", "Boys"], horizontal=True)
+    division_filter = st.radio("Division Filter", ["All", "Girls", "Boys"], horizontal=True)
 
     filtered_events = [
         e
@@ -293,9 +292,42 @@ with tab_scoring:
         f"Event {e.event_number}: {'Girls' if e.gender == 'F' else 'Boys'} {e.name}"
         for e in filtered_events
     ]
-    selected_idx = event_col.selectbox(
-        "Select Event", range(len(filtered_events)), format_func=lambda i: event_labels[i]
+
+    if "scoring_event_idx" not in st.session_state:
+        st.session_state.scoring_event_idx = 0
+
+    # Reset if switching the Division Filter makes the saved index out of range
+    if st.session_state.scoring_event_idx >= len(filtered_events):
+        st.session_state.scoring_event_idx = 0
+
+    def _prev_event() -> None:
+        st.session_state.scoring_event_idx = max(0, st.session_state.scoring_event_idx - 1)
+
+    def _next_event(max_idx: int) -> None:
+        st.session_state.scoring_event_idx = min(max_idx, st.session_state.scoring_event_idx + 1)
+
+    nav_prev, nav_select, nav_next = st.columns([1, 4, 1], vertical_alignment="bottom")
+
+    nav_prev.button(
+        "⬅️ Prev Event",
+        on_click=_prev_event,
+        disabled=st.session_state.scoring_event_idx == 0,
+        use_container_width=True,
     )
+    selected_idx = nav_select.selectbox(
+        "Select Event",
+        range(len(filtered_events)),
+        format_func=lambda i: event_labels[i],
+        key="scoring_event_idx",
+    )
+    nav_next.button(
+        "Next Event ➡️",
+        on_click=_next_event,
+        args=(len(filtered_events) - 1,),
+        disabled=st.session_state.scoring_event_idx >= len(filtered_events) - 1,
+        use_container_width=True,
+    )
+
     selected_event = filtered_events[selected_idx]
     gender_label = "Girls" if selected_event.gender == "F" else "Boys"
 
