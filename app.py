@@ -389,7 +389,7 @@ with tab_scoring:
                     "Team",
                     "Rly",
                     "Swimmers (comma-sep)",
-                    "Pad Time",
+                    "Watch Time",
                     "Backups (csv)",
                     "Status",
                     "JD",
@@ -402,7 +402,7 @@ with tab_scoring:
                     "Lane",
                     "Team",
                     "Swimmer (Last, First)",
-                    "Pad Time",
+                    "Watch Time",
                     "Backups (csv)",
                     "Status",
                     "JD",
@@ -465,10 +465,10 @@ with tab_scoring:
                         )
                         l_names = [n.strip() for n in raw_names.split(",") if n.strip()]
 
-                    l_pad = cols[4].text_input(
-                        "Pad",
+                    l_watch = cols[4].text_input(
+                        "Watch",
                         placeholder="1:45.20",
-                        key=f"{key_prefix}_pad",
+                        key=f"{key_prefix}_watch",
                         label_visibility="collapsed",
                     )
                     l_backups = cols[5].text_input(
@@ -517,10 +517,10 @@ with tab_scoring:
                         )
                         l_names = [raw_name.strip()] if raw_name.strip() else []
 
-                    l_pad = cols[3].text_input(
-                        "Pad",
+                    l_watch = cols[3].text_input(
+                        "Watch",
                         placeholder="24.51",
-                        key=f"{key_prefix}_pad",
+                        key=f"{key_prefix}_Watch",
                         label_visibility="collapsed",
                     )
                     l_backups = cols[4].text_input(
@@ -551,7 +551,7 @@ with tab_scoring:
                         "team": l_team,
                         "relay": l_relay,
                         "names": l_names,
-                        "pad": l_pad,
+                        "watch": l_watch,
                         "backups": l_backups,
                         "status": l_status,
                         "jd": None if l_jd == "Auto" else int(l_jd),
@@ -573,7 +573,7 @@ with tab_scoring:
                         continue  # Skip empty lane
 
                     try:
-                        pad_cs = parse_time_to_cs(row["pad"]) if row["pad"].strip() else None
+                        pad_cs = parse_time_to_cs(row["watch"]) if row["watch"].strip() else None
                         backups_cs = [
                             parse_time_to_cs(t) for t in row["backups"].split(",") if t.strip()
                         ]
@@ -583,7 +583,7 @@ with tab_scoring:
                         )
                         continue
 
-                    official_cs = calculate_official_time(pad_cs, backups_cs, row["malf"])
+                    official_cs = calculate_official_time(watch_cs, backups_cs, row["malf"])
                     entry_id = str(uuid.uuid4())[:8]
 
                     new_entry = Entry(
@@ -596,7 +596,7 @@ with tab_scoring:
                     )
                     new_result = Result(
                         entry_id=entry_id,
-                        pad_time_cs=pad_cs,
+                        watch_time_cs=watch_cs,
                         backup_times_cs=backups_cs,
                         status=ResultStatus(row["status"]),
                         official_time_cs=official_cs,
