@@ -753,3 +753,268 @@ def export_lane_timer_sheets_html(
 </body>
 </html>
 """
+
+
+def export_event_pair_timer_sheets_html(
+    team_a: str,
+    team_b: str,
+    events: list[Event],
+    lineups: dict,
+    meet_date: date | None = None,
+) -> str:
+    """Generates a 12-page print-ready HTML packet pairing Girls & Boys events (Ev 1&2, 3&4, ..., 23&24) per page."""
+    date_display = (meet_date or date.today()).strftime("%B %d, %Y")
+    esc_a = html.escape(team_a)
+    esc_b = html.escape(team_b)
+    norm_lineups = _normalize_lineup_lookup(lineups)
+
+    event_pairs = [events[i : i + 2] for i in range(0, len(events), 2)]
+    pages_html: list[str] = []
+
+    for pair_idx, pair in enumerate(event_pairs):
+        pair_title = " &amp; ".join(
+            f"Ev {ev.event_number} ({'Girls' if ev.gender == 'F' else 'Boys'})"
+            for ev in pair
+        )
+        base_name = html.escape(pair[0].name)
+        blocks_html: list[str] = []
+
+        for ev in pair:
+            g_label = "Girls" if ev.gender == "F" else "Boys"
+            ev_heading = f"Event {ev.event_number}: {g_label} {html.escape(ev.name)}"
+
+            if ev.event_type == EventType.DIVING:
+                blocks_html.append(
+                    f"""
+                    <div class="ev-card">
+                      <div class="ev-bar">
+                        <span>{ev_heading}</span>
+                        <span class="judge-line">Referee / Judge: ______________________</span>
+                      </div>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th class="center" style="width: 8%;">Ord</th>
+                            <th style="width: 24%;">Team</th>
+                            <th style="width: 42%;">Diver Name</th>
+                            <th class="center" style="width: 16%;">Total Score</th>
+                            <th class="center" style="width: 10%;">Note</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {''.join(
+                              f"<tr><td class='center'><strong>{slot}</strong></td><td></td><td></td><td class='watch'></td><td></td></tr>"
+                              for slot in range(1, 7)
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    """
+                )
+                continue
+
+            ev_heats = sorted(
+                {
+                    heat_num
+                    for (ev_num, heat_num, _lane), data in norm_lineups.items()
+                    if ev_num == ev.event_number and data.get("athlete_ids")
+                }
+            )
+            if not ev_heats:
+                ev_heats = [1]
+
+            for heat_num in ev_heats:
+                heat_suffix = (
+                    f" — Heat {heat_num} (Scoring)"
+                    if heat_num == 1
+                    else f" — Heat {heat_num} (Exhibition)"
+                )
+                rows_html: list[str] = []
+
+                for lane in range(1, 7):
+                    default_team = team_a if lane % 2 == 0 else team_b
+                    data = norm_lineups.get((ev.event_number, heat_num, lane))
+                    if data and data.get("athlete_ids"):
+                        t_str = html.escape(data.get("team_id") or default_team)
+                        athlete_ids = data["athlete_ids"]
+                        relay_letter = data.get("relay_letter")
+                        if ev.event_type == EventType.RELAY and relay_letter:
+                            participant = f"Rly {relay_letter}: {', '.join(athlete_ids)}"
+                        else:
+                            participant = ", ".join(athlete_ids)
+                        swimmer_str = html.escape(participant)
+                        note_str = "EXH" if (data.get("is_exhibition") or heat_num > 1) else ""
+                    else:
+                        t_str = html.escape(default_team)
+                        swimmer_str = ""
+                        note_str = "EXH" if heat_num > 1 else ""
+
+                    rows_html.append(
+                        f"<tr>"
+                        f"<td class='center'><strong>{lane}</strong></td>"
+                        f"<td>{t_str}</td>"
+                        f"<td class='swimmer'>{swimmer_str}</td>"
+                        f"<td class='watch'></td>"
+                        f"<td class='watch'></td>"
+                        f"<td class='watch'></td>"
+                        f"<td class='center'>{note_str}</td>"
+                        f"</tr>"
+                    )
+
+                blocks_html.append(
+                    f"""
+                    <div class="ev-card">
+                      <div class="ev-bar">
+                        <span>{ev_heading}{html.escape(heat_suffix)}</span>
+                        <span class="judge-line">Head Timer / Stroke Judge: ______________________</span>
+                      </div>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th class="center" style="width: 7%;">Lane</th>
+                            <th style="width: 20%;">Team</th>
+                            <th style="width: 34%;">Swimmer / Relay</th>
+                            <th class="center" style="width: 11%;">Watch 1</th>
+                            <th class="center" style="width: 11%;">Watch 2</th>
+                            <th class="center" style="width: 11%;">Watch 3</th>
+                            <th class="center" style="width: 6%;">Note</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {''.join(rows_html)}
+                        </tbody>
+                      </table>
+                    </div>
+                    """
+                )
+
+        page_cls = "pair-page" if pair_idx < len(event_pairs) - 1 else "pair-page last-page"
+        pages_html.append(
+            f"""
+            <section class="{page_cls}">
+              <header>
+                <div>
+                  <h1>EVENT TIMER CARD — {base_name}</h1>
+                  <div class="meta">{esc_a} (Even Lanes) vs. {esc_b} (Odd Lanes) &nbsp;|&nbsp; {pair_title}</div>
+                </div>
+                <div class="meta right">{date_display}</div>
+              </header>
+              {''.join(blocks_html)}
+            </section>
+            """
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Event Timer Cards (Girls &amp; Boys Paired) — {esc_a} vs {esc_b}</title>
+  <style>
+    @page {{
+      size: letter portrait;
+      margin: 0.4in;
+    }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #111;
+      margin: 0;
+      padding: 16px;
+      font-size: 11px;
+      line-height: 1.25;
+    }}
+    .pair-page {{
+      max-width: 820px;
+      margin: 0 auto 32px auto;
+      page-break-after: always;
+      break-after: page;
+    }}
+    .pair-page.last-page {{
+      page-break-after: auto;
+      break-after: auto;
+    }}
+    header {{
+      border-bottom: 2px solid #222;
+      padding-bottom: 6px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }}
+    header h1 {{
+      margin: 0;
+      font-size: 17px;
+      letter-spacing: 0.02em;
+    }}
+    .meta {{
+      color: #333;
+      font-size: 11px;
+    }}
+    .right {{
+      text-align: right;
+    }}
+    .ev-card {{
+      margin-bottom: 16px;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }}
+    .ev-bar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-weight: 700;
+      font-size: 12px;
+      background: #e2e8f0;
+      padding: 5px 8px;
+      border-left: 4px solid #0f766e;
+      border-top: 1px solid #94a3b8;
+      border-right: 1px solid #94a3b8;
+    }}
+    .judge-line {{
+      font-weight: 400;
+      font-size: 10px;
+      color: #334155;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+    }}
+    th, td {{
+      border: 1px solid #999;
+      padding: 5px 6px;
+      text-align: left;
+      vertical-align: middle;
+    }}
+    th {{
+      font-size: 10px;
+      text-transform: uppercase;
+      background: #f8fafc;
+      color: #1e293b;
+    }}
+    tbody tr:nth-child(odd) {{
+      background-color: #ffffff;
+    }}
+    tbody tr:nth-child(even) {{
+      background-color: #f4f6f9;
+    }}
+    td.swimmer {{
+      font-size: 11px;
+    }}
+    td.watch {{
+      height: 22px;
+    }}
+    .center {{ text-align: center; }}
+    @media print {{
+      body {{ padding: 0; }}
+      .pair-page {{ max-width: 100%; margin: 0; }}
+      .ev-bar, th, tbody tr:nth-child(even) {{
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  {''.join(pages_html)}
+</body>
+</html>
+"""
