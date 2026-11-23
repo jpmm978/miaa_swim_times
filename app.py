@@ -15,7 +15,6 @@ from storage import (
     clear_event,
     clear_lineups,
     create_new_meet,
-    delete_entry_and_result,
     delete_meet,
     export_meet_csv,
     get_active_meet_id,
@@ -33,7 +32,7 @@ from storage import (
     save_team_names,
     set_active_meet,
     set_meet_status,
-    update_result_override,
+    update_entry_and_result,
 )
 from timing import calculate_official_time, format_cs_to_time, parse_time_to_cs
 from validation import validate_athlete_entries
@@ -849,63 +848,207 @@ with tab_scoring:
             res.entry_id: (
                 f"{event_entries[res.entry_id].team_id} — "
                 f"{', '.join(event_entries[res.entry_id].athlete_ids)} "
-                f"(Current Place: {res.place if res.place is not None else '—'}"
+                f"(Place: {res.place if res.place is not None else '—'}"
                 f"{' JD' if res.manual_place is not None else ''})"
             )
             for res in event_results
         }
         results_by_id = {res.entry_id: res for res in event_results}
 
-        with st.expander("Edit Official Judge's Decision (JD) Override"):
-            selected_entry_id = st.selectbox(
-                "Select Swimmer / Relay",
+        # --- Edit an Existing Result (Replaces Delete) ---
+        with st.expander("Edit Existing Result"):
+            edit_entry_id = st.selectbox(
+                "Select Swimmer / Relay to Edit",
                 options=list(result_options.keys()),
                 format_func=lambda eid: result_options[eid],
-                key=f"jd_edit_select_ev_{selected_event.event_number}",
+                key=f"edit_res_select_ev_{selected_event.event_number}",
             )
-            current_res = results_by_id[selected_entry_id]
-            current_jd_idx = (
-                JD_OPTIONS.index(current_res.manual_place)
-                if current_res.manual_place in JD_OPTIONS
+            cur_entry = event_entries[edit_entry_id]
+            cur_res = results_by_id[edit_entry_id]
+            teams_list = [team_a, team_b]
+            cur_team_idx = teams_list.index(cur_entry.team_id) if cur_entry.team_id in teams_list else 0
+            status_list = [s.value for s in ResultStatus]
+            cur_status_idx = (
+                status_list.index(cur_res.status.value)
+                if cur_res.status.value in status_list
                 else 0
             )
-
-            with st.form(f"jd_edit_form_ev_{selected_event.event_number}"):
-                e1, e2 = st.columns([1, 2])
-                new_jd = e1.selectbox(
-                    "JD Place (choose Auto to clear)",
-                    options=JD_OPTIONS,
-                    index=current_jd_idx,
-                )
-                new_note = e2.text_input(
-                    "Official Note (optional)",
-                    value=current_res.override_note,
-                    placeholder="e.g., Watch malfunction - visual 1st",
-                )
-
-                if st.form_submit_button("Save JD Override", type="primary", disabled=is_meet_closed):
-                    update_result_override(
-                        entry_id=selected_entry_id,
-                        manual_place=None if new_jd == "Auto" else int(new_jd),
-                        override_note=new_note,
-                    )
-                    st.rerun()
-
-        with st.expander("Delete a Single Result"):
-            delete_entry_id = st.selectbox(
-                "Select Swimmer / Relay to Remove",
-                options=list(result_options.keys()),
-                format_func=lambda eid: result_options[eid],
-                key=f"del_select_ev_{selected_event.event_number}",
+            cur_jd_idx = (
+                JD_OPTIONS.index(cur_res.manual_place)
+                if cur_res.manual_place in JD_OPTIONS
+                else 0
             )
-            if st.button(
-                "Delete Selected Result",
-                type="secondary",
-                key=f"del_btn_ev_{selected_event.event_number}",
-                disabled=is_meet_closed,
-            ):
-                delete_entry_and_result(delete_entry_id)
-                st.rerun()
+            edit_roster = rosters.get((cur_entry.team_id, selected_event.gender), [])
+
+            with st.form(f"edit_res_form_ev_{selected_event.event_number}_{edit_entry_id}"):
+                f1, f2, f3 = st.columns([1.4, 2.2, 1.0])
+                upd_team = f1.selectbox("Team", teams_list, index=cur_team_idx)
+
+                if selected_event.event_type == EventType.RELAY:
+                    if edit_roster:
+                        upd_athletes = f2.multiselect(
+                            "Relay Swimmers",
+                            options=edit_roster,
+                            default=[n for n in cur_entry.athlete_ids if n in edit_roster],
+                            max_selections=4,
+                        )
+                    else:
+                        raw_upd_rly = f2.text_input(
+                            "Relay Swimmers (comma-sep)",
+                            value=", ".join(cur_entry.athlete_ids),
+                        )
+                        upd_athletes = [n.strip() for n in raw_upd_rly.split(",") if n.strip()]
+                    upd_relay = f3.text_input(
+                        "Relay Letter",
+                        value=cur_entry.relay_letter or "A",
+                    )
+                else:
+                    upd_relay = None
+                    cur_single = cur_entry.athlete_ids[0] if cur_entry.athlete_ids else ""
+                    if edit_roster:
+                        opts = [""] + edit_roster
+                        picked_idx = opts.index(cur_single) if cur_single in opts else 0
+                        picked_ath = f2.selectbox("Athlete", options=opts, index=picked_idx)
+                        upd_athletes = [picked_ath] if picked_ath else []
+                    else:
+                        raw_upd_ath = f2.text_input("Athlete Name", value=cur_single)
+                        upd_athletes = [raw_upd_ath.strip()] if raw_upd_ath.strip() else []
+                    f3.caption("Individual / Dive")
+
+                if selected_event.event_type == EventType.DIVING:
+                    p1, p2, p3, p4 = st.columns([1.5, 1.2, 1.0, 1.3])
+                    upd_dive = p1.number_input(
+                        "Total Score",
+                        min_value=0.0,
+                        step=0.05,
+                        format="%.2f",
+                        value=float(cur_res.diving_score or 0.0),
+                    )
+                    upd_status = p2.selectbox("Status", status_list, index=cur_status_idx)
+                    upd_jd = p3.selectbox("JD Place", JD_OPTIONS, index=cur_jd_idx)
+                    upd_exh = p4.checkbox("Exhibition", value=cur_entry.is_exhibition)
+                    upd_watch_str = ""
+                    upd_bkp_str = ""
+                    upd_malf = False
+                else:
+                    t1, t2, t3 = st.columns([1.3, 1.7, 1.0])
+                    upd_watch_str = t1.text_input(
+                        "Watch Time",
+                        value=(
+                            format_cs_to_time(cur_res.watch_time_cs)
+                            if cur_res.watch_time_cs is not None
+                            else ""
+                        ),
+                        placeholder="24.51 or 1:45.20",
+                    )
+                    upd_bkp_str = t2.text_input(
+                        "Backups (csv)",
+                        value=", ".join(format_cs_to_time(t) for t in cur_res.backup_times_cs),
+                        placeholder="24.51, 24.52",
+                    )
+                    upd_malf = t3.checkbox(
+                        "Watch Malfunction",
+                        value=(
+                            cur_res.watch_time_cs is not None
+                            and cur_res.official_time_cs is not None
+                            and cur_res.official_time_cs != cur_res.watch_time_cs
+                        ),
+                    )
+
+                    s1, s2, s3 = st.columns([1.3, 1.2, 1.5])
+                    upd_status = s1.selectbox("Status", status_list, index=cur_status_idx)
+                    upd_jd = s2.selectbox("JD Place", JD_OPTIONS, index=cur_jd_idx)
+                    upd_exh = s3.checkbox("Exhibition", value=cur_entry.is_exhibition)
+                    upd_dive = None
+
+                upd_note = st.text_input(
+                    "Official / JD Note (optional)",
+                    value=cur_res.override_note,
+                    placeholder="e.g., Corrected watch time / JD place",
+                )
+                upd_override_limits = st.checkbox(
+                    "Override NFHS entry limit warnings",
+                    key=f"upd_ovr_lim_{selected_event.event_number}_{edit_entry_id}",
+                )
+
+                if st.form_submit_button("Save Result Changes", type="primary", disabled=is_meet_closed):
+                    if not upd_athletes:
+                        st.error("Please enter at least one athlete.")
+                    else:
+                        parse_ok = True
+                        upd_watch_cs = None
+                        upd_backups_cs: list[int] = []
+                        upd_official_cs = None
+
+                        if selected_event.event_type != EventType.DIVING:
+                            try:
+                                upd_watch_cs = (
+                                    parse_time_to_cs(upd_watch_str)
+                                    if upd_watch_str.strip()
+                                    else None
+                                )
+                                upd_backups_cs = [
+                                    parse_time_to_cs(t)
+                                    for t in upd_bkp_str.split(",")
+                                    if t.strip()
+                                ]
+                            except ValueError:
+                                st.error("Invalid time format. Use SS.cc or MM:SS.cc.")
+                                parse_ok = False
+                            else:
+                                upd_official_cs = calculate_official_time(
+                                    upd_watch_cs, upd_backups_cs, upd_malf
+                                )
+
+                        if parse_ok:
+                            updated_entry = Entry(
+                                entry_id=cur_entry.entry_id,
+                                event_number=cur_entry.event_number,
+                                team_id=upd_team,
+                                athlete_ids=upd_athletes,
+                                is_exhibition=upd_exh,
+                                relay_letter=(
+                                    upd_relay.strip() if upd_relay else None
+                                ),
+                            )
+                            other_entries = [
+                                e for e in entries if e.entry_id != cur_entry.entry_id
+                            ]
+                            projected_entries = other_entries + [updated_entry]
+                            violations: list[str] = []
+                            for ath_id in upd_athletes:
+                                violations.extend(
+                                    validate_athlete_entries(
+                                        ath_id, projected_entries, EVENTS_BY_NUM
+                                    )
+                                )
+
+                            if violations and not upd_override_limits:
+                                for msg in violations:
+                                    st.warning(f"NFHS Rule 3-2-1 Violation: {msg}")
+                                st.error(
+                                    "Update blocked. Fix the lineup or check 'Override NFHS entry limit warnings'."
+                                )
+                            else:
+                                updated_result = Result(
+                                    entry_id=cur_res.entry_id,
+                                    watch_time_cs=upd_watch_cs,
+                                    backup_times_cs=upd_backups_cs,
+                                    diving_score=(
+                                        float(upd_dive)
+                                        if selected_event.event_type == EventType.DIVING
+                                        and upd_dive is not None
+                                        else None
+                                    ),
+                                    status=ResultStatus(upd_status),
+                                    official_time_cs=upd_official_cs,
+                                    manual_place=(
+                                        None if upd_jd == "Auto" else int(upd_jd)
+                                    ),
+                                    override_note=upd_note,
+                                )
+                                update_entry_and_result(updated_entry, updated_result)
+                                st.rerun()
 
         if st.button(f"Clear Event {selected_event.event_number} Results", disabled=is_meet_closed):
             clear_event(selected_event.event_number, active_meet_id)
