@@ -158,16 +158,11 @@ def _is_entry_exhibition(entry: Entry) -> bool:
 
 def _format_parent_cut_badge(cut_info: dict[str, str]) -> str:
     status = cut_info.get("status", "")
-    delta = cut_info.get("delta", "")
     if status == "State Cut":
-        return f"🏅 State Cut ({delta})" if delta else "🏅 State Cut"
+        return "🏅 State Cut (Div I)"
     if status == "Sectional Cut":
-        return f"✅ Sectional Cut ({delta})" if delta else "✅ Sectional Cut"
-    if status == "Close":
-        return f"🔥 Close ({delta})" if delta else "🔥 Close"
-    if delta:
-        return f"{status} ({delta})"
-    return status or "—"
+        return "✅ Sectional Cut (C.West)"
+    return ""
 
 
 def _pill_selector(
