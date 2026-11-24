@@ -257,7 +257,7 @@ def export_meet_html(
       margin: 12px auto;
       padding: 0 12px;
       font-size: 9.5px;
-      line-height: 1.22;
+      line-height: 1.2;
     }}
     header {{
       border-bottom: 1.5px solid #222;
@@ -288,15 +288,16 @@ def export_meet_html(
     .score-banner strong {{
       font-size: 13px;
     }}
-    /* Multi-column masonry layout eliminates vertical white-space gaps between uneven events */
+    /* Multi-column masonry layout with buffer before the signature section */
     .events-grid {{
       column-count: 2;
       column-gap: 12px;
+      margin-bottom: 14px;
     }}
     .event-block {{
       display: inline-block;
       width: 100%;
-      margin: 0 0 4px 0;
+      margin: 0 0 3px 0;
       page-break-inside: avoid;
       break-inside: avoid;
       vertical-align: top;
@@ -304,9 +305,9 @@ def export_meet_html(
     .event-block h3 {{
       margin: 0;
       font-size: 10.5px;
-      line-height: 1.25;
+      line-height: 1.2;
       background: #e2e8f0;
-      padding: 2px 5px;
+      padding: 1.5px 5px;
       border-left: 3px solid #0f766e;
     }}
     table {{
@@ -315,7 +316,7 @@ def export_meet_html(
     }}
     th, td {{
       border-bottom: 1px solid #e2e8f0;
-      padding: 1.5px 3.5px;
+      padding: 1px 3.5px;
       text-align: left;
       vertical-align: top;
     }}
@@ -347,15 +348,16 @@ def export_meet_html(
       word-break: break-word;
     }}
     .signatures {{
-      margin-top: 10px;
+      margin-top: 14px;
+      padding-top: 16px;
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 10px 28px;
+      gap: 12px 30px;
       page-break-inside: avoid;
       break-inside: avoid;
     }}
     .sig-grid-4 {{
-      gap: 8px 24px;
+      gap: 10px 26px;
     }}
     .sig-card {{
       display: flex;
@@ -1411,4 +1413,3 @@ def export_lane_event_pair_sheets_html(
   {body_content}
 </body>
 </html>
-"""
