@@ -163,17 +163,31 @@ def _pill_selector(
     format_func=None,
     default=None,
 ):
-    """Uses st.segmented_control when available, falling back to horizontal st.radio."""
+    """Uses st.segmented_control when available and prevents deselecting to None."""
+    fallback_val = default if default in options else options[0]
+    last_key = f"{key}_last_valid"
+
+    if last_key not in st.session_state or st.session_state[last_key] not in options:
+        st.session_state[last_key] = fallback_val
+
     if hasattr(st, "segmented_control"):
-        return st.segmented_control(
+        if key in st.session_state and st.session_state[key] is None:
+            st.session_state[key] = st.session_state[last_key]
+
+        selected = st.segmented_control(
             label,
             options=options,
-            default=default if default is not None else options[0],
+            default=st.session_state[last_key],
             format_func=format_func,
             key=key,
         )
-    idx = options.index(default) if default in options else 0
-    return st.radio(
+        if selected in options:
+            st.session_state[last_key] = selected
+            return selected
+        return st.session_state[last_key]
+
+    idx = options.index(st.session_state[last_key])
+    selected = st.radio(
         label,
         options=options,
         index=idx,
@@ -181,6 +195,8 @@ def _pill_selector(
         horizontal=True,
         key=key,
     )
+    st.session_state[last_key] = selected
+    return selected
 
 
 def _call_export_meet_html(
@@ -996,24 +1012,26 @@ with tab_scoring:
         for e in filtered_events
     ]
 
-    if "scoring_event_idx" not in st.session_state:
-        st.session_state.scoring_event_idx = 0
-
-    if st.session_state.scoring_event_idx >= len(filtered_events):
-        st.session_state.scoring_event_idx = 0
+    cur_idx = st.session_state.get("scoring_event_idx")
+    if not isinstance(cur_idx, int) or cur_idx < 0 or cur_idx >= len(filtered_events):
+        st.session_state["scoring_event_idx"] = 0
 
     def _prev_event() -> None:
-        st.session_state.scoring_event_idx = max(0, st.session_state.scoring_event_idx - 1)
+        idx = st.session_state.get("scoring_event_idx")
+        idx = idx if isinstance(idx, int) else 0
+        st.session_state["scoring_event_idx"] = max(0, idx - 1)
 
     def _next_event(max_idx: int) -> None:
-        st.session_state.scoring_event_idx = min(max_idx, st.session_state.scoring_event_idx + 1)
+        idx = st.session_state.get("scoring_event_idx")
+        idx = idx if isinstance(idx, int) else 0
+        st.session_state["scoring_event_idx"] = min(max_idx, idx + 1)
 
     nav_prev, nav_select, nav_next = st.columns([1, 4, 1], vertical_alignment="bottom")
 
     nav_prev.button(
         "⬅️ Prev Event",
         on_click=_prev_event,
-        disabled=st.session_state.scoring_event_idx == 0,
+        disabled=st.session_state["scoring_event_idx"] == 0,
         use_container_width=True,
     )
     selected_idx = nav_select.selectbox(
@@ -1022,11 +1040,15 @@ with tab_scoring:
         format_func=lambda i: event_labels[i],
         key="scoring_event_idx",
     )
+    if not isinstance(selected_idx, int):
+        selected_idx = 0
+        st.session_state["scoring_event_idx"] = 0
+
     nav_next.button(
         "Next Event ➡️",
         on_click=_next_event,
         args=(len(filtered_events) - 1,),
-        disabled=st.session_state.scoring_event_idx >= len(filtered_events) - 1,
+        disabled=selected_idx >= len(filtered_events) - 1,
         use_container_width=True,
     )
 
@@ -1114,8 +1136,8 @@ with tab_scoring:
                 )
             else:
                 st.caption(
-                    "Pre-filled from Batch Lineup if saved. Leave unused lanes blank. "
-                    "Use JD only for an official Judge's Decision place override."
+                    "Pre-filled from Batch Lineup if saved. Enter digits only (e.g., 2451 = 24.51, 14520 = 1:45.20) "
+                    "or standard times. Leave unused lanes blank."
                 )
 
             with st.form(f"heat_grid_ev_{selected_event.event_number}_h{selected_heat}", clear_on_submit=True):
@@ -1204,13 +1226,13 @@ with tab_scoring:
 
                         l_watch = cols[4].text_input(
                             "Watch",
-                            placeholder="1:45.20",
+                            placeholder="14520",
                             key=f"{key_prefix}_watch",
                             label_visibility="collapsed",
                         )
                         l_backups = cols[5].text_input(
                             "Backups",
-                            placeholder="1:45.21, 1:45.25",
+                            placeholder="14521, 14525",
                             key=f"{key_prefix}_bkp",
                             label_visibility="collapsed",
                         )
@@ -1256,13 +1278,13 @@ with tab_scoring:
 
                         l_watch = cols[3].text_input(
                             "Watch",
-                            placeholder="24.51",
+                            placeholder="2451",
                             key=f"{key_prefix}_watch",
                             label_visibility="collapsed",
                         )
                         l_backups = cols[4].text_input(
                             "Backups",
-                            placeholder="24.51, 24.52",
+                            placeholder="2451, 2452",
                             key=f"{key_prefix}_bkp",
                             label_visibility="collapsed",
                         )
@@ -1318,7 +1340,7 @@ with tab_scoring:
                             ]
                         except ValueError:
                             parse_errors.append(
-                                f"Lane {row['lane']}: Invalid time format (use SS.cc or MM:SS.cc)."
+                                f"Lane {row['lane']}: Invalid time format (use digits like 2451 / 14520, or SS.cc / MM:SS.cc)."
                             )
                             continue
 
@@ -1547,12 +1569,12 @@ with tab_scoring:
                             if cur_res.watch_time_cs is not None
                             else ""
                         ),
-                        placeholder="24.51 or 1:45.20",
+                        placeholder="2451 or 24.51",
                     )
                     upd_bkp_str = t2.text_input(
                         "Backups (csv)",
                         value=", ".join(format_cs_to_time(t) for t in cur_res.backup_times_cs),
-                        placeholder="24.51, 24.52",
+                        placeholder="2451, 2452",
                     )
                     upd_malf = t3.checkbox(
                         "Watch Malfunction",
@@ -1603,7 +1625,7 @@ with tab_scoring:
                                     if t.strip()
                                 ]
                             except ValueError:
-                                st.error("Invalid time format. Use SS.cc or MM:SS.cc.")
+                                st.error("Invalid time format. Use digits like 2451 / 14520, or SS.cc / MM:SS.cc.")
                                 parse_ok = False
                             else:
                                 upd_official_cs = calculate_official_time(
