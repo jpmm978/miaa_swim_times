@@ -6,8 +6,8 @@ from models import Entry, Event, EventType, Result
 from timing import format_cs_to_time
 
 SIGNATURE_ROLES = [
-    ("referee", "Official 1 (Meet Referee) Signature & Date"),
-    ("starter", "Official 2 (Starter / Stroke & Turn) Signature & Date"),
+    ("referee", "Official 1 Signature & Date"),
+    ("starter", "Official 2 Signature & Date"),
     ("home_coach", "Home Coach Signature & Date"),
     ("visitor_coach", "Visitor Coach Signature & Date"),
 ]
@@ -89,8 +89,8 @@ def _render_signatures_section(signatures: Optional[dict[str, dict]]) -> str:
     if not has_any_saved:
         return """
   <section class="signatures">
-    <div class="sig-line">Official 1 (Meet Referee) Signature &amp; Date</div>
-    <div class="sig-line">Official 2 (Starter / Stroke &amp; Turn) Signature &amp; Date</div>
+    <div class="sig-line">Official 1 Signature &amp; Date</div>
+    <div class="sig-line">Official 2 Signature &amp; Date</div>
   </section>
 """
 
