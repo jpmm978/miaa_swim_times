@@ -248,28 +248,28 @@ def export_meet_html(
   <style>
     @page {{
       size: letter portrait;
-      margin: 0.25in;
+      margin: 0.4in;
     }}
     body {{
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       color: #111;
-      max-width: 840px;
-      margin: 8px auto;
-      padding: 0 8px;
+      max-width: 820px;
+      margin: 12px auto;
+      padding: 0 12px;
       font-size: 8.5px;
-      line-height: 1.15;
+      line-height: 1.2;
     }}
     header {{
       border-bottom: 1.5px solid #222;
-      padding-bottom: 4px;
-      margin-bottom: 5px;
+      padding-bottom: 5px;
+      margin-bottom: 7px;
       display: flex;
       justify-content: space-between;
       align-items: center;
     }}
     header h1 {{
       margin: 0;
-      font-size: 14px;
+      font-size: 14.5px;
     }}
     .meta {{
       color: #444;
@@ -277,12 +277,12 @@ def export_meet_html(
     }}
     .score-banner {{
       display: flex;
-      gap: 14px;
+      gap: 16px;
       align-items: center;
       background: #f5f5f5;
       border: 1px solid #ccc;
       border-radius: 3px;
-      padding: 3px 8px;
+      padding: 3px 9px;
       font-size: 11px;
     }}
     .score-banner strong {{
@@ -291,12 +291,12 @@ def export_meet_html(
     /* Multi-column masonry layout eliminates vertical white-space gaps between uneven events */
     .events-grid {{
       column-count: 2;
-      column-gap: 10px;
+      column-gap: 12px;
     }}
     .event-block {{
       display: inline-block;
       width: 100%;
-      margin: 0 0 4px 0;
+      margin: 0 0 6px 0;
       page-break-inside: avoid;
       break-inside: avoid;
       vertical-align: top;
@@ -304,9 +304,9 @@ def export_meet_html(
     .event-block h3 {{
       margin: 0;
       font-size: 9.5px;
-      line-height: 1.2;
+      line-height: 1.25;
       background: #e2e8f0;
-      padding: 1.5px 4px;
+      padding: 2px 5px;
       border-left: 3px solid #0f766e;
     }}
     table {{
@@ -315,7 +315,7 @@ def export_meet_html(
     }}
     th, td {{
       border-bottom: 1px solid #e2e8f0;
-      padding: 1px 3px;
+      padding: 1.5px 3.5px;
       text-align: left;
       vertical-align: top;
     }}
@@ -347,20 +347,20 @@ def export_meet_html(
       word-break: break-word;
     }}
     .footnote {{
-      margin-top: 3px;
+      margin-top: 4px;
       font-size: 7.5px;
       color: #555;
     }}
     .signatures {{
-      margin-top: 10px;
+      margin-top: 12px;
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 10px 28px;
+      gap: 12px 30px;
       page-break-inside: avoid;
       break-inside: avoid;
     }}
     .sig-grid-4 {{
-      gap: 8px 24px;
+      gap: 10px 26px;
     }}
     .sig-card {{
       display: flex;
@@ -368,14 +368,14 @@ def export_meet_html(
       justify-content: flex-end;
     }}
     .sig-img {{
-      max-height: 30px;
-      max-width: 180px;
+      max-height: 32px;
+      max-width: 185px;
       object-fit: contain;
       display: block;
-      margin-bottom: 1px;
+      margin-bottom: 2px;
     }}
     .sig-spacer {{
-      height: 26px;
+      height: 28px;
     }}
     .sig-line {{
       border-top: 1px solid #222;
@@ -384,7 +384,7 @@ def export_meet_html(
       color: #333;
     }}
     @media print {{
-      body {{ margin: 0; padding: 0; max-width: 100%; }}
+      body {{ margin: 0; padding: 0.06in; max-width: 100%; }}
       .score-banner, .event-block h3, th, tbody tr:nth-child(even) {{
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
