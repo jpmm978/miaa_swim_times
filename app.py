@@ -22,7 +22,7 @@ except ImportError:
         export_lane_timer_sheets_html,
         export_meet_html,
     )
-from scoring import MeetFormat, score_event
+from scoring import MeetFormat, evaluate_gar_qualifying_cut, score_event
 from sdif_export import export_meet_sd3
 from storage import (
     add_roster_swimmer,
@@ -154,6 +154,20 @@ saved_signatures = load_meet_signatures(active_meet_id)
 
 def _is_entry_exhibition(entry: Entry) -> bool:
     return bool(entry.is_exhibition) or (getattr(entry, "heat_number", 1) > 1)
+
+
+def _format_parent_cut_badge(cut_info: dict[str, str]) -> str:
+    status = cut_info.get("status", "")
+    delta = cut_info.get("delta", "")
+    if status == "State Cut":
+        return f"🏅 State Cut ({delta})" if delta else "🏅 State Cut"
+    if status == "Sectional Cut":
+        return f"✅ Sectional Cut ({delta})" if delta else "✅ Sectional Cut"
+    if status == "Close":
+        return f"🔥 Close ({delta})" if delta else "🔥 Close"
+    if delta:
+        return f"{status} ({delta})"
+    return status or "—"
 
 
 def _pill_selector(
@@ -458,10 +472,11 @@ meet_header_title = active_meet_meta["title"] if active_meet_meta else f"{team_a
 if is_parent_view:
     st.title(f"Live Meet Results & Times — {meet_header_title}")
     st.caption(
-        "Spectator View (Read-Only): Live team scores, event results, and swimmer times."
+        "Spectator View (Read-Only): Live team scores, swimmer times, and 2026–2027 MIAA "
+        "Qualifying Standards (C.West Sectionals & Division I States)."
     )
 
-    p_top1, p_top2, p_top3 = st.columns([2.2, 2.0, 1.3], vertical_alignment="bottom")
+    p_top1, p_top2, p_top3, p_top4 = st.columns([1.8, 1.9, 1.1, 1.2], vertical_alignment="bottom")
     p_div = p_top1.radio(
         "Division", ["All", "Girls", "Boys"], horizontal=True, key="parent_div_filter"
     )
@@ -470,7 +485,8 @@ if is_parent_view:
         placeholder="Type a swimmer's name or team...",
         key="parent_search_input",
     ).strip().lower()
-    p_auto_refresh = p_top3.checkbox("Auto-refresh (15s)", value=False, key="parent_autorefresh")
+    p_gar_only = p_top3.checkbox("GAR Only", value=False, key="parent_gar_only")
+    p_auto_refresh = p_top4.checkbox("Auto-refresh (15s)", value=False, key="parent_autorefresh")
 
     s_cols = st.columns(4)
     s_cols[0].metric(
@@ -516,6 +532,8 @@ if is_parent_view:
             tied_places = {p for p, cnt in place_counts.items() if cnt > 1}
 
             for ent in ev_ents:
+                if p_gar_only and "GAR" not in ent.team_id.upper():
+                    continue
                 res = results_by_entry_p.get(ent.entry_id)
                 if not res:
                     continue
@@ -543,6 +561,7 @@ if is_parent_view:
                 )
                 heat_num = getattr(ent, "heat_number", 1)
                 exh_flag = _is_entry_exhibition(ent)
+                cut_info = evaluate_gar_qualifying_cut(ev, res)
 
                 matched_rows.append(
                     {
@@ -554,6 +573,9 @@ if is_parent_view:
                         "Team": ent.team_id,
                         "Swimmer / Relay": participants_str,
                         "Time / Score": perf,
+                        "C.West Cut": cut_info["sectional_cut"],
+                        "Div I State Cut": cut_info["state_cut"],
+                        "Qualifying Status": _format_parent_cut_badge(cut_info),
                         "Status": "" if res.status == ResultStatus.OK else res.status.value,
                         "Exh": "Exh" if exh_flag else "",
                         "Points": f"{res.points:g}",
@@ -566,7 +588,7 @@ if is_parent_view:
             st.info("No recorded results matched your search in this division.")
 
     st.divider()
-    st.subheader("Event-by-Event Results")
+    st.subheader("Event-by-Event Results & 2026–2027 MIAA Cut Times")
 
     any_event_shown = False
     for ev in STANDARD_EVENTS:
@@ -575,7 +597,12 @@ if is_parent_view:
         if p_div == "Boys" and ev.gender != "M":
             continue
 
-        ev_ents = [e for e in entries if e.event_number == ev.event_number]
+        ev_ents = [
+            e
+            for e in entries
+            if e.event_number == ev.event_number
+            and (not p_gar_only or "GAR" in e.team_id.upper())
+        ]
 
         if p_search:
             filtered_pairs = []
@@ -639,6 +666,7 @@ if is_parent_view:
             )
             heat_num = getattr(ent, "heat_number", 1)
             exh_flag = _is_entry_exhibition(ent)
+            cut_info = evaluate_gar_qualifying_cut(ev, res)
 
             ev_table_rows.append(
                 {
@@ -647,6 +675,9 @@ if is_parent_view:
                     "Team": ent.team_id,
                     "Swimmer / Relay": participants_str,
                     "Time / Score": perf,
+                    "C.West Cut": cut_info["sectional_cut"],
+                    "Div I State Cut": cut_info["state_cut"],
+                    "Qualifying Status": _format_parent_cut_badge(cut_info),
                     "Status": "" if res.status == ResultStatus.OK else res.status.value,
                     "Exh": "Exh" if exh_flag else "",
                     "Points": f"{res.points:g}",
@@ -969,18 +1000,120 @@ if is_meet_closed:
         "or click **Reopen Meet** in the sidebar to make edits."
     )
 
-tab_scoring, tab_lineup, tab_audit, tab_signoff = st.tabs(
+tab_audit, tab_scoring, tab_lineup, tab_signoff = st.tabs(
     [
+        "📊 MIAA Scoring Sheet",
         "⏱️ Event Scoring",
         "📋 Batch Lineup & Seeding",
-        "📊 Official Scoring Check",
         "✍️ Official Sign-Off",
     ]
 )
 
 
 # ==============================================================================
-# TAB 1: EVENT SCORING
+# TAB 1: MIAA SCORING SHEET (OFFICIAL AUDIT & RUNNING TOTALS)
+# ==============================================================================
+with tab_audit:
+    st.subheader("MIAA Official Scoring Sheet & Running Totals")
+    st.caption(
+        "Central verification view for meet officials and coaches to confirm event-by-event "
+        "points, running cumulative totals, ties, and Judge's Decision (JD) overrides."
+    )
+
+    a_filter_col, a_expand_col = st.columns([2.5, 1.5], vertical_alignment="bottom")
+    audit_div = _pill_selector(
+        "Division View",
+        options=["All", "Girls", "Boys"],
+        key="audit_div_pill",
+        default="All",
+    ) or "All"
+    expand_all_events = a_expand_col.checkbox("Expand all event point breakdowns", value=False)
+
+    gender_code = "F" if audit_div == "Girls" else ("M" if audit_div == "Boys" else "All")
+
+    s_cols = st.columns(4)
+    s_cols[0].metric(f"Girls {team_a}", f"{g_score_a:g}")
+    s_cols[1].metric(f"Girls {team_b}", f"{g_score_b:g}")
+    s_cols[2].metric(f"Boys {team_a}", f"{b_score_a:g}")
+    s_cols[3].metric(f"Boys {team_b}", f"{b_score_b:g}")
+
+    audit_rows = build_scoring_audit_rows(team_a, team_b, gender_code)
+    st.dataframe(audit_rows, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Event-by-Event Point Breakdown")
+
+    entries_by_id_all = {e.entry_id: e for e in entries}
+    for ev in STANDARD_EVENTS:
+        if gender_code != "All" and ev.gender != gender_code:
+            continue
+
+        ev_scores = score_event(
+            event=ev,
+            entries=entries,
+            results=results,
+            meet_format=MeetFormat.DUAL,
+        )
+        ev_pts_a = float(ev_scores.get(team_a, 0.0))
+        ev_pts_b = float(ev_scores.get(team_b, 0.0))
+        ev_res_list = [
+            r
+            for r in results
+            if entries_by_id_all.get(r.entry_id)
+            and entries_by_id_all[r.entry_id].event_number == ev.event_number
+        ]
+        ev_res_list.sort(
+            key=lambda r: (
+                getattr(entries_by_id_all[r.entry_id], "heat_number", 1),
+                r.place is None,
+                r.place or 999,
+            )
+        )
+        g_lbl = "Girls" if ev.gender == "F" else "Boys"
+
+        with st.expander(
+            f"Event {ev.event_number}: {g_lbl} {ev.name} — {team_a}: {ev_pts_a:g} | {team_b}: {ev_pts_b:g}",
+            expanded=expand_all_events,
+        ):
+            if not ev_res_list:
+                st.caption("No results recorded yet.")
+            else:
+                detail_rows = []
+                for r in ev_res_list:
+                    ent = entries_by_id_all[r.entry_id]
+                    heat_num = getattr(ent, "heat_number", 1)
+                    exh_flag = _is_entry_exhibition(ent)
+                    perf = (
+                        f"{r.diving_score:.2f}"
+                        if ev.event_type == EventType.DIVING and r.diving_score is not None
+                        else (
+                            format_cs_to_time(r.official_time_cs)
+                            if r.official_time_cs is not None
+                            else "—"
+                        )
+                    )
+                    detail_rows.append(
+                        {
+                            "Heat": f"H{heat_num}",
+                            "Place": (
+                                f"{r.place} (JD)"
+                                if r.place is not None and r.manual_place is not None
+                                else (str(r.place) if r.place is not None else "—")
+                            ),
+                            "Team": ent.team_id,
+                            "Participant": ", ".join(ent.athlete_ids),
+                            "Time / Score": perf,
+                            "Status": r.status.value,
+                            "Exh": "Yes" if exh_flag else "",
+                            "Points": f"{r.points:g}",
+                            "Note": r.override_note or "—",
+                        }
+                    )
+                st.table(detail_rows)
+
+
+# ==============================================================================
+# TAB 2: EVENT SCORING
 # ==============================================================================
 with tab_scoring:
     top_f1, top_f2 = st.columns([2.2, 2.8], vertical_alignment="bottom")
@@ -1088,7 +1221,7 @@ with tab_scoring:
         ]
     )
 
-    # --- SUB-TAB 1A: RECORD HEAT / DIVING ---
+    # --- SUB-TAB 2A: RECORD HEAT / DIVING ---
     with sc_sub_entry:
         if selected_event.event_type == EventType.DIVING:
             st.subheader(f"Add Diving Score — {gender_label} {selected_event.name}")
@@ -1408,7 +1541,7 @@ with tab_scoring:
                                 save_entry_and_result(ent, res, active_meet_id)
                             st.rerun()
 
-    # --- SUB-TAB 1B: OFFICIAL RESULTS & EDIT ---
+    # --- SUB-TAB 2B: OFFICIAL RESULTS & EDIT ---
     with sc_sub_results:
         st.subheader(
             f"Official Results — Event {selected_event.event_number}: {gender_label} {selected_event.name}"
@@ -1703,7 +1836,7 @@ with tab_scoring:
                 clear_event(selected_event.event_number, active_meet_id)
                 st.rerun()
 
-    # --- SUB-TAB 1C: SWIMMER EVENT COUNT LOOKUP ---
+    # --- SUB-TAB 2C: SWIMMER EVENT COUNT LOOKUP ---
     with sc_sub_lookup:
         st.subheader("Swimmer Event Count Lookup (NFHS Rule 3-2-1)")
         st.caption("Check total events (max 4) and individual/diving events (max 2) before deck changes.")
@@ -1730,7 +1863,7 @@ with tab_scoring:
 
 
 # ==============================================================================
-# TAB 2: BATCH LINEUP & SEEDING
+# TAB 3: BATCH LINEUP & SEEDING
 # ==============================================================================
 with tab_lineup:
     populated_lane_count = sum(1 for d in lineups.values() if d.get("athlete_ids"))
@@ -1753,7 +1886,7 @@ with tab_lineup:
         ]
     )
 
-    # --- SUB-TAB 2A: LINEUP & HEAT SEEDING ---
+    # --- SUB-TAB 3A: LINEUP & HEAT SEEDING ---
     with lu_sub_seeding:
         lineup_div = _pill_selector(
             "Show Division",
@@ -1989,7 +2122,7 @@ with tab_lineup:
                     del st.session_state[key]
             st.rerun()
 
-    # --- SUB-TAB 2B: PRINTABLE HEAT & TIMER SHEETS ---
+    # --- SUB-TAB 3B: PRINTABLE HEAT & TIMER SHEETS ---
     with lu_sub_prints:
         st.subheader("Printable Deck Reports & Lane Timer Sheets")
         st.caption(
@@ -2083,108 +2216,6 @@ with tab_lineup:
                 mime="text/html",
                 use_container_width=True,
             )
-
-
-# ==============================================================================
-# TAB 3: OFFICIAL SCORING CHECK (AUDIT VIEW)
-# ==============================================================================
-with tab_audit:
-    st.subheader("Official Scoring Audit & Running Totals")
-    st.caption(
-        "Central verification view for meet officials and coaches to confirm event-by-event "
-        "points, running cumulative totals, ties, and Judge's Decision (JD) overrides."
-    )
-
-    a_filter_col, a_expand_col = st.columns([2.5, 1.5], vertical_alignment="bottom")
-    audit_div = _pill_selector(
-        "Division View",
-        options=["All", "Girls", "Boys"],
-        key="audit_div_pill",
-        default="All",
-    ) or "All"
-    expand_all_events = a_expand_col.checkbox("Expand all event point breakdowns", value=False)
-
-    gender_code = "F" if audit_div == "Girls" else ("M" if audit_div == "Boys" else "All")
-
-    s_cols = st.columns(4)
-    s_cols[0].metric(f"Girls {team_a}", f"{g_score_a:g}")
-    s_cols[1].metric(f"Girls {team_b}", f"{g_score_b:g}")
-    s_cols[2].metric(f"Boys {team_a}", f"{b_score_a:g}")
-    s_cols[3].metric(f"Boys {team_b}", f"{b_score_b:g}")
-
-    audit_rows = build_scoring_audit_rows(team_a, team_b, gender_code)
-    st.dataframe(audit_rows, use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.subheader("Event-by-Event Point Breakdown")
-
-    entries_by_id_all = {e.entry_id: e for e in entries}
-    for ev in STANDARD_EVENTS:
-        if gender_code != "All" and ev.gender != gender_code:
-            continue
-
-        ev_scores = score_event(
-            event=ev,
-            entries=entries,
-            results=results,
-            meet_format=MeetFormat.DUAL,
-        )
-        ev_pts_a = float(ev_scores.get(team_a, 0.0))
-        ev_pts_b = float(ev_scores.get(team_b, 0.0))
-        ev_res_list = [
-            r
-            for r in results
-            if entries_by_id_all.get(r.entry_id)
-            and entries_by_id_all[r.entry_id].event_number == ev.event_number
-        ]
-        ev_res_list.sort(
-            key=lambda r: (
-                getattr(entries_by_id_all[r.entry_id], "heat_number", 1),
-                r.place is None,
-                r.place or 999,
-            )
-        )
-        g_lbl = "Girls" if ev.gender == "F" else "Boys"
-
-        with st.expander(
-            f"Event {ev.event_number}: {g_lbl} {ev.name} — {team_a}: {ev_pts_a:g} | {team_b}: {ev_pts_b:g}",
-            expanded=expand_all_events,
-        ):
-            if not ev_res_list:
-                st.caption("No results recorded yet.")
-            else:
-                detail_rows = []
-                for r in ev_res_list:
-                    ent = entries_by_id_all[r.entry_id]
-                    heat_num = getattr(ent, "heat_number", 1)
-                    exh_flag = _is_entry_exhibition(ent)
-                    perf = (
-                        f"{r.diving_score:.2f}"
-                        if ev.event_type == EventType.DIVING and r.diving_score is not None
-                        else (
-                            format_cs_to_time(r.official_time_cs)
-                            if r.official_time_cs is not None
-                            else "—"
-                        )
-                    )
-                    detail_rows.append(
-                        {
-                            "Heat": f"H{heat_num}",
-                            "Place": (
-                                f"{r.place} (JD)"
-                                if r.place is not None and r.manual_place is not None
-                                else (str(r.place) if r.place is not None else "—")
-                            ),
-                            "Team": ent.team_id,
-                            "Participant": ", ".join(ent.athlete_ids),
-                            "Time / Score": perf,
-                            "Status": r.status.value,
-                            "Exh": "Yes" if exh_flag else "",
-                            "Points": f"{r.points:g}",
-                            "Note": r.override_note or "—",
-                        }
-                    )
-                st.table(detail_rows)
 
 
 # ==============================================================================
