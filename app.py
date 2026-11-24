@@ -1012,37 +1012,52 @@ with tab_scoring:
         for e in filtered_events
     ]
 
-    cur_idx = st.session_state.get("scoring_event_idx")
-    if not isinstance(cur_idx, int) or cur_idx < 0 or cur_idx >= len(filtered_events):
-        st.session_state["scoring_event_idx"] = 0
+    if "active_scoring_event_idx" not in st.session_state:
+        st.session_state["active_scoring_event_idx"] = 0
+
+    if not isinstance(st.session_state["active_scoring_event_idx"], int) or (
+        st.session_state["active_scoring_event_idx"] < 0
+        or st.session_state["active_scoring_event_idx"] >= len(filtered_events)
+    ):
+        st.session_state["active_scoring_event_idx"] = 0
 
     def _prev_event() -> None:
-        idx = st.session_state.get("scoring_event_idx")
-        idx = idx if isinstance(idx, int) else 0
-        st.session_state["scoring_event_idx"] = max(0, idx - 1)
+        cur = st.session_state.get("active_scoring_event_idx", 0)
+        cur = cur if isinstance(cur, int) else 0
+        st.session_state["active_scoring_event_idx"] = max(0, cur - 1)
+        st.session_state["scoring_event_select"] = st.session_state["active_scoring_event_idx"]
 
     def _next_event(max_idx: int) -> None:
-        idx = st.session_state.get("scoring_event_idx")
-        idx = idx if isinstance(idx, int) else 0
-        st.session_state["scoring_event_idx"] = min(max_idx, idx + 1)
+        cur = st.session_state.get("active_scoring_event_idx", 0)
+        cur = cur if isinstance(cur, int) else 0
+        st.session_state["active_scoring_event_idx"] = min(max_idx, cur + 1)
+        st.session_state["scoring_event_select"] = st.session_state["active_scoring_event_idx"]
+
+    def _on_event_select_change() -> None:
+        picked = st.session_state.get("scoring_event_select", 0)
+        if isinstance(picked, int) and 0 <= picked < len(filtered_events):
+            st.session_state["active_scoring_event_idx"] = picked
+
+    st.session_state["scoring_event_select"] = st.session_state["active_scoring_event_idx"]
 
     nav_prev, nav_select, nav_next = st.columns([1, 4, 1], vertical_alignment="bottom")
 
     nav_prev.button(
         "⬅️ Prev Event",
         on_click=_prev_event,
-        disabled=st.session_state["scoring_event_idx"] == 0,
+        disabled=st.session_state["active_scoring_event_idx"] == 0,
         use_container_width=True,
     )
     selected_idx = nav_select.selectbox(
         "Select Event",
-        range(len(filtered_events)),
+        options=list(range(len(filtered_events))),
         format_func=lambda i: event_labels[i],
-        key="scoring_event_idx",
+        key="scoring_event_select",
+        on_change=_on_event_select_change,
     )
-    if not isinstance(selected_idx, int):
+    if not isinstance(selected_idx, int) or selected_idx >= len(filtered_events):
         selected_idx = 0
-        st.session_state["scoring_event_idx"] = 0
+        st.session_state["active_scoring_event_idx"] = 0
 
     nav_next.button(
         "Next Event ➡️",
