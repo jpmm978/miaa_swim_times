@@ -222,10 +222,10 @@ def export_meet_html(
               <table>
                 <thead>
                   <tr>
-                    <th class="num" style="width: 8%;">Pl</th>
-                    <th style="width: 22%;">Team</th>
-                    <th style="width: 44%;">Participant</th>
-                    <th class="num" style="width: 17%;">Official</th>
+                    <th class="num" style="width: 7%;">Pl</th>
+                    <th style="width: 21%;">Team</th>
+                    <th style="width: 47%;">Participant</th>
+                    <th class="num" style="width: 16%;">Official</th>
                     <th class="num" style="width: 9%;">Pts</th>
                   </tr>
                 </thead>
@@ -248,61 +248,65 @@ def export_meet_html(
   <style>
     @page {{
       size: letter portrait;
-      margin: 0.35in;
+      margin: 0.25in;
     }}
     body {{
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       color: #111;
-      max-width: 820px;
-      margin: 12px auto;
-      padding: 0 10px;
-      font-size: 9px;
-      line-height: 1.2;
+      max-width: 840px;
+      margin: 8px auto;
+      padding: 0 8px;
+      font-size: 8.5px;
+      line-height: 1.15;
     }}
     header {{
-      border-bottom: 2px solid #222;
-      padding-bottom: 6px;
-      margin-bottom: 8px;
+      border-bottom: 1.5px solid #222;
+      padding-bottom: 4px;
+      margin-bottom: 5px;
       display: flex;
       justify-content: space-between;
       align-items: center;
     }}
     header h1 {{
       margin: 0;
-      font-size: 15px;
+      font-size: 14px;
     }}
     .meta {{
       color: #444;
-      font-size: 10px;
+      font-size: 9.5px;
     }}
     .score-banner {{
       display: flex;
-      gap: 18px;
+      gap: 14px;
       align-items: center;
       background: #f5f5f5;
       border: 1px solid #ccc;
       border-radius: 3px;
-      padding: 4px 10px;
-      font-size: 12px;
+      padding: 3px 8px;
+      font-size: 11px;
     }}
     .score-banner strong {{
-      font-size: 14px;
+      font-size: 13px;
     }}
+    /* Multi-column masonry layout eliminates vertical white-space gaps between uneven events */
     .events-grid {{
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px 14px;
-      align-items: start;
+      column-count: 2;
+      column-gap: 10px;
     }}
     .event-block {{
+      display: inline-block;
+      width: 100%;
+      margin: 0 0 4px 0;
       page-break-inside: avoid;
       break-inside: avoid;
+      vertical-align: top;
     }}
     .event-block h3 {{
-      margin: 0 0 2px 0;
-      font-size: 10px;
+      margin: 0;
+      font-size: 9.5px;
+      line-height: 1.2;
       background: #e2e8f0;
-      padding: 2px 5px;
+      padding: 1.5px 4px;
       border-left: 3px solid #0f766e;
     }}
     table {{
@@ -310,13 +314,13 @@ def export_meet_html(
       border-collapse: collapse;
     }}
     th, td {{
-      border-bottom: 1px solid #e0e0e0;
-      padding: 2px 3px;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 1px 3px;
       text-align: left;
       vertical-align: top;
     }}
     th {{
-      font-size: 8px;
+      font-size: 7.5px;
       text-transform: uppercase;
       color: #475569;
       background: #f8fafc;
@@ -337,26 +341,26 @@ def export_meet_html(
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      max-width: 75px;
+      max-width: 72px;
     }}
     .name {{
       word-break: break-word;
     }}
     .footnote {{
-      margin-top: 6px;
-      font-size: 8px;
+      margin-top: 3px;
+      font-size: 7.5px;
       color: #555;
     }}
     .signatures {{
-      margin-top: 16px;
+      margin-top: 10px;
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 16px 36px;
+      gap: 10px 28px;
       page-break-inside: avoid;
       break-inside: avoid;
     }}
     .sig-grid-4 {{
-      gap: 12px 32px;
+      gap: 8px 24px;
     }}
     .sig-card {{
       display: flex;
@@ -364,19 +368,19 @@ def export_meet_html(
       justify-content: flex-end;
     }}
     .sig-img {{
-      max-height: 36px;
-      max-width: 190px;
+      max-height: 30px;
+      max-width: 180px;
       object-fit: contain;
       display: block;
-      margin-bottom: 2px;
+      margin-bottom: 1px;
     }}
     .sig-spacer {{
-      height: 32px;
+      height: 26px;
     }}
     .sig-line {{
       border-top: 1px solid #222;
-      padding-top: 3px;
-      font-size: 9px;
+      padding-top: 2px;
+      font-size: 8.5px;
       color: #333;
     }}
     @media print {{
@@ -1104,9 +1108,9 @@ def export_lane_event_pair_sheets_html(
     """Generates a print-ready HTML packet with one page per lane for each event pair.
 
     Page ordering:
-      - Events 1 & 2: Lane 1, Lane 2, ..., Lane 6
-      - Events 3 & 4: Lane 1, Lane 2, ..., Lane 6
-      - ... through Events 23 & 24: Lane 1, Lane 2, ..., Lane 6
+- Events 1 & 2: Lane 1, Lane 2, ..., Lane 6
+- Events 3 & 4: Lane 1, Lane 2, ..., Lane 6
+- ... through Events 23 & 24: Lane 1, Lane 2, ..., Lane 6
     """
     date_display = (meet_date or date.today()).strftime("%B %d, %Y")
     esc_a = html.escape(team_a)
