@@ -4,7 +4,14 @@ from enum import Enum
 from itertools import combinations, groupby
 from typing import Optional
 
-from models import Entry, Event, EventType, Result, ResultStatus
+from models import (
+    Entry,
+    Event,
+    EventType,
+    Result,
+    ResultStatus,
+    get_gar_cut_standards,
+)
 
 
 class MeetFormat(Enum):
@@ -112,9 +119,9 @@ def score_event(
     manual_place (Judge's Decision) overrides when present.
     Heats after Heat 1 (heat_number > 1) are treated as exhibition and earn 0 points.
 
-- Updates `place` and `points` on each Result object in place.
-- Returns a dict mapping `team_id` -> total points earned in this event.
-- Pass `team_filter` (e.g., {"TEAM_A", "TEAM_B"}) to score head-to-head
+    - Updates `place` and `points` on each Result object in place.
+    - Returns a dict mapping `team_id` -> total points earned in this event.
+    - Pass `team_filter` (e.g., {"TEAM_A", "TEAM_B"}) to score head-to-head
       in a double-dual or triple-dual meet.
     """
     config = SCORING_CONFIGS[meet_format]
@@ -216,3 +223,107 @@ def score_head_to_head_meet(
         matchups[(team_a, team_b)] = pair_totals
 
     return matchups
+
+
+# --- 2026-2027 MIAA Qualifying Cut Comparison (GAR: C.West & Div I) ---
+
+
+def format_centiseconds(cs: Optional[int]) -> str:
+    """Formats integer centiseconds into M:SS.cc or SS.cc."""
+    if cs is None:
+        return "—"
+    minutes, rem_cs = divmod(abs(cs), 6000)
+    seconds, hundredths = divmod(rem_cs, 100)
+    sign = "-" if cs < 0 else ""
+    if minutes > 0:
+        return f"{sign}{minutes}:{seconds:02d}.{hundredths:02d}"
+    return f"{sign}{seconds}.{hundredths:02d}"
+
+
+def evaluate_gar_qualifying_cut(event: Event, result: Result) -> dict[str, str]:
+    """
+    Evaluates a legal Result against 2026-2027 MIAA Winter qualifying standards
+    for GAR (Central/West Sectionals and Division I State Championships).
+    """
+    cuts = get_gar_cut_standards(event.gender, event.name)
+    if not cuts:
+        return {
+            "sectional_cut": "—",
+            "state_cut": "—",
+            "status": "No Cut Standard",
+            "delta": "",
+        }
+
+    sec_cut = cuts["C.West"]
+    state_cut = cuts["Div I"]
+
+    if event.event_type == EventType.DIVING:
+        sec_str = f"{sec_cut:.0f} pts (x2)"
+        state_str = f"{state_cut:.0f} pts (x2)"
+        score = result.diving_score
+        if result.status != ResultStatus.OK or score is None:
+            return {
+                "sectional_cut": sec_str,
+                "state_cut": state_str,
+                "status": result.status.value if result.status != ResultStatus.OK else "Pending",
+                "delta": "",
+            }
+        if score >= state_cut:
+            return {
+                "sectional_cut": sec_str,
+                "state_cut": state_str,
+                "status": "State Cut",
+                "delta": f"+{score - state_cut:.1f} vs Div I",
+            }
+        if score >= sec_cut:
+            return {
+                "sectional_cut": sec_str,
+                "state_cut": state_str,
+                "status": "Sectional Cut",
+                "delta": f"+{score - sec_cut:.1f} vs C.West",
+            }
+        gap = sec_cut - score
+        return {
+            "sectional_cut": sec_str,
+            "state_cut": state_str,
+            "status": "Close" if gap <= 15.0 else "Below Cut",
+            "delta": f"-{gap:.1f} to C.West",
+        }
+
+    sec_cs = int(sec_cut)
+    state_cs = int(state_cut)
+    sec_str = format_centiseconds(sec_cs)
+    state_str = format_centiseconds(state_cs)
+    time_cs = result.official_time_cs
+
+    if result.status != ResultStatus.OK or time_cs is None:
+        return {
+            "sectional_cut": sec_str,
+            "state_cut": state_str,
+            "status": result.status.value if result.status != ResultStatus.OK else "Pending",
+            "delta": "",
+        }
+
+    if time_cs <= state_cs:
+        return {
+            "sectional_cut": sec_str,
+            "state_cut": state_str,
+            "status": "State Cut",
+            "delta": f"-{format_centiseconds(state_cs - time_cs)}s under Div I",
+        }
+    if time_cs <= sec_cs:
+        return {
+            "sectional_cut": sec_str,
+            "state_cut": state_str,
+            "status": "Sectional Cut",
+            "delta": f"-{format_centiseconds(sec_cs - time_cs)}s under C.West",
+        }
+
+    over_cs = time_cs - sec_cs
+    bubble_cs = 300 if "500" in event.name else 150
+    return {
+        "sectional_cut": sec_str,
+        "state_cut": state_str,
+        "status": "Close" if over_cs <= bubble_cs else "Above Cut",
+        "delta": f"+{format_centiseconds(over_cs)}s to C.West",
+    }
