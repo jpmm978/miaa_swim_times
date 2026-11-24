@@ -244,13 +244,14 @@ def evaluate_gar_qualifying_cut(event: Event, result: Result) -> dict[str, str]:
     """
     Evaluates a legal Result against 2026-2027 MIAA Winter qualifying standards
     for GAR (Central/West Sectionals and Division I State Championships).
+    Returns an empty status/badge when the cut is not met.
     """
     cuts = get_gar_cut_standards(event.gender, event.name)
     if not cuts:
         return {
             "sectional_cut": "—",
             "state_cut": "—",
-            "status": "No Cut Standard",
+            "status": "",
             "delta": "",
         }
 
@@ -265,7 +266,7 @@ def evaluate_gar_qualifying_cut(event: Event, result: Result) -> dict[str, str]:
             return {
                 "sectional_cut": sec_str,
                 "state_cut": state_str,
-                "status": result.status.value if result.status != ResultStatus.OK else "Pending",
+                "status": "",
                 "delta": "",
             }
         if score >= state_cut:
@@ -282,12 +283,11 @@ def evaluate_gar_qualifying_cut(event: Event, result: Result) -> dict[str, str]:
                 "status": "Sectional Cut",
                 "delta": f"+{score - sec_cut:.1f} vs C.West",
             }
-        gap = sec_cut - score
         return {
             "sectional_cut": sec_str,
             "state_cut": state_str,
-            "status": "Close" if gap <= 15.0 else "Below Cut",
-            "delta": f"-{gap:.1f} to C.West",
+            "status": "",
+            "delta": "",
         }
 
     sec_cs = int(sec_cut)
@@ -300,7 +300,7 @@ def evaluate_gar_qualifying_cut(event: Event, result: Result) -> dict[str, str]:
         return {
             "sectional_cut": sec_str,
             "state_cut": state_str,
-            "status": result.status.value if result.status != ResultStatus.OK else "Pending",
+            "status": "",
             "delta": "",
         }
 
@@ -319,11 +319,9 @@ def evaluate_gar_qualifying_cut(event: Event, result: Result) -> dict[str, str]:
             "delta": f"-{format_centiseconds(sec_cs - time_cs)}s under C.West",
         }
 
-    over_cs = time_cs - sec_cs
-    bubble_cs = 300 if "500" in event.name else 150
     return {
         "sectional_cut": sec_str,
         "state_cut": state_str,
-        "status": "Close" if over_cs <= bubble_cs else "Above Cut",
-        "delta": f"+{format_centiseconds(over_cs)}s to C.West",
+        "status": "",
+        "delta": "",
     }
